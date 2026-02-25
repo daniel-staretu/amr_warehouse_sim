@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+
+# Cached neural heuristic weights (auto-generated at runtime)
+navigation/heuristic_*.npz

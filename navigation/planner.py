@@ -262,3 +262,41 @@ class AStarPlanner:
             path.append(self.grid_to_world(node.x, node.y))
             node = node.parent
         return path[::-1]  # Return reversed path (start -> end)
+
+
+# ---------------------------------------------------------------------------
+# Neural D* Lite Planner
+# ---------------------------------------------------------------------------
+
+class NeuralDStarLitePlanner(DStarLitePlanner):
+    """
+    D* Lite with a learned neural-network heuristic.
+
+    On the first call to set_obstacles() the MLP is either loaded from a
+    cached .npz file (keyed by obstacle hash) or trained from scratch using
+    ground-truth costs collected by running vanilla D* Lite on random
+    start/goal pairs.  Subsequent runs load instantly from cache.
+
+    If training fails (e.g. degenerate map), falls back to Euclidean distance.
+    """
+
+    def __init__(self, resolution, map_width, map_height):
+        super().__init__(resolution, map_width, map_height)
+        self._nn   = None
+        self._norm = math.sqrt(
+            int(map_width  / resolution) ** 2 +
+            int(map_height / resolution) ** 2
+        )
+
+    def set_obstacles(self, obstacle_list):
+        super().set_obstacles(obstacle_list)
+        from navigation.neural_heuristic import build_heuristic
+        self._nn = build_heuristic(self.obstacles, self.width, self.height)
+
+    def _h(self, a, b):
+        if self._nn is None:
+            return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
+        from navigation.neural_heuristic import encode_features, ADMISSIBILITY_FACTOR
+        features = encode_features(a, b, self.obstacles, self.width, self.height)
+        raw = float(self._nn.forward(features)) * self._norm
+        return max(0.0, raw * ADMISSIBILITY_FACTOR)

@@ -1,7 +1,7 @@
 import numpy as np
 
 # Planner selection: "dstar_lite" (default) or "astar"
-PLANNER = "dstar_lite"
+PLANNER = "neural_dstar_lite"
 
 # Simulation settings
 TIME_STEP = 1./240.
