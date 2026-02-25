@@ -14,11 +14,11 @@ RESOLUTION = 1 # meters per grid cell (lower = finer path, slower calc)
 ROBOT_RADIUS = 0.3
 WHEEL_RADIUS = 0.1
 AXLE_LENGTH = 0.5
-MAX_SPEED = 15      # m/s
-MAX_STEERING = 10.0  # rad/s
+MAX_SPEED = 2.0     # m/s
+MAX_STEERING = 3.0  # rad/s
 
 # Navigation
-LOOKAHEAD_DISTANCE = 0.8  # Pure Pursuit lookahead
+LOOKAHEAD_DISTANCE = 1.5  # Pure Pursuit lookahead (must be > RESOLUTION to see ahead)
 GOAL_THRESHOLD = 0.4      # Distance to consider goal reached
 
 # Vision

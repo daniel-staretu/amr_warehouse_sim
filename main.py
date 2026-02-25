@@ -1,14 +1,49 @@
 import pybullet as p
 import time
-import cv2
-import numpy as np
+import math
+import random
 
 from config import *
 from simulation.world import WarehouseWorld
 from simulation.robot import WarehouseRobot
 from navigation.planner import AStarPlanner
 from navigation.controller import PurePursuitController
-from perception.vision import VisionSystem
+
+MIN_GOAL_DISTANCE = 3.0   # meters — new goal must be at least this far from the robot
+MAP_MARGIN = 1.5          # meters — keep goals away from the outer walls
+
+
+def pick_random_goal(planner, robot_pos):
+    """Pick a random reachable goal not in the robot's immediate vicinity."""
+    while True:
+        gx = random.uniform(-MAP_WIDTH / 2 + MAP_MARGIN, MAP_WIDTH / 2 - MAP_MARGIN)
+        gy = random.uniform(-MAP_HEIGHT / 2 + MAP_MARGIN, MAP_HEIGHT / 2 - MAP_MARGIN)
+
+        if math.hypot(gx - robot_pos[0], gy - robot_pos[1]) < MIN_GOAL_DISTANCE:
+            continue
+
+        path = planner.plan(robot_pos, [gx, gy])
+        if path:
+            return list(path[-1]), path
+
+
+def draw_path(path):
+    """Draw path as blue debug lines. Returns list of debug item IDs."""
+    line_ids = []
+    for i in range(len(path) - 1):
+        lid = p.addUserDebugLine(
+            [path[i][0], path[i][1], 0.1],
+            [path[i + 1][0], path[i + 1][1], 0.1],
+            [0, 0, 1], 2
+        )
+        line_ids.append(lid)
+    return line_ids
+
+
+def clear_path(line_ids):
+    """Remove all debug lines from a previous path."""
+    for lid in line_ids:
+        p.removeUserDebugItem(lid)
 
 
 def main():
@@ -21,11 +56,7 @@ def main():
     world = WarehouseWorld()
     obstacles = world.build_walls()
 
-    # Add a target for the robot to find
-    target_pos_real = [5, 5]
-    world.add_target_crate(target_pos_real[0], target_pos_real[1])
-
-    # 2. Spawn Robot
+    # 2. Spawn Robot (fixed starting position)
     start_pos = [-8, -8]
     robot = WarehouseRobot(start_pos=[start_pos[0], start_pos[1], 0.1])
 
@@ -33,62 +64,43 @@ def main():
     planner = AStarPlanner(RESOLUTION, MAP_WIDTH, MAP_HEIGHT)
     planner.set_obstacles(obstacles)
 
-    # Plan path to a location NEAR the target (we don't want to crash into it)
-    goal_pos = [4, 4]
-    print("Planning path...")
-    path = planner.plan(start_pos, goal_pos)
-
-    if not path:
-        print("No path found!")
-        return
+    # 4. Pick initial random goal and plan path
+    robot_state = robot.get_state()
+    goal_pos, path = pick_random_goal(planner, [robot_state[0], robot_state[1]])
+    print(f"Initial goal: ({goal_pos[0]:.2f}, {goal_pos[1]:.2f})")
 
     controller = PurePursuitController()
     controller.set_path(path)
+    line_ids = draw_path(path)
 
-    # 4. Setup Vision
-    vision = VisionSystem(robot.id)
+    # 5. Main Loop
+    print("Starting simulation... (Ctrl+C to quit)")
+    try:
+        while True:
+            robot_state = robot.get_state()
 
-    # 5. Debug Visualization (Draw path lines)
-    for i in range(len(path) - 1):
-        p.addUserDebugLine([path[i][0], path[i][1], 0.1],
-                           [path[i + 1][0], path[i + 1][1], 0.1],
-                           [0, 0, 1], 2)
+            # Check if current goal has been reached
+            dist_to_goal = math.hypot(goal_pos[0] - robot_state[0], goal_pos[1] - robot_state[1])
+            if dist_to_goal < GOAL_THRESHOLD:
+                print(f"Goal ({goal_pos[0]:.2f}, {goal_pos[1]:.2f}) reached! Picking new goal...")
+                clear_path(line_ids)
+                goal_pos, path = pick_random_goal(planner, [robot_state[0], robot_state[1]])
+                print(f"New goal: ({goal_pos[0]:.2f}, {goal_pos[1]:.2f})")
+                controller.set_path(path)
+                line_ids = draw_path(path)
 
-    # 6. Main Loop
-    print("Starting simulation...")
-    while True:
-        # Get Sensor Data
-        robot_state = robot.get_state()
-
-        # Get Camera Feed
-        img_rgb = vision.get_camera_image()
-
-        # Run "AI" Detection
-        detections, debug_img = vision.detect_target(img_rgb)
-
-        # Logic: If we see the target, stop. Else, follow path.
-        if detections:
-            print("Target Detected! Stopping.")
-            v, omega = 0, 0
-            cv2.putText(debug_img, "TARGET FOUND", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        else:
+            # Compute and apply control
             v, omega = controller.compute_control(robot_state)
+            robot.apply_control(v, omega)
 
-        # Apply Control
-        robot.apply_control(v, omega)
+            # Step Simulation
+            p.stepSimulation()
+            time.sleep(TIME_STEP)
 
-        # Step Simulation
-        p.stepSimulation()
-
-        # Visualization
-        cv2.imshow("Robot Vision", debug_img)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-        time.sleep(TIME_STEP)
-
-    p.disconnect()
-    cv2.destroyAllWindows()
+    except KeyboardInterrupt:
+        print("Simulation stopped.")
+    finally:
+        p.disconnect()
 
 
 if __name__ == "__main__":
