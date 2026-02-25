@@ -6,7 +6,7 @@ import random
 from config import *
 from simulation.world import WarehouseWorld
 from simulation.robot import WarehouseRobot
-from navigation.planner import AStarPlanner
+from navigation.planner import AStarPlanner, DStarLitePlanner
 from navigation.controller import PurePursuitController
 
 MIN_GOAL_DISTANCE = 3.0   # meters — new goal must be at least this far from the robot
@@ -61,7 +61,11 @@ def main():
     robot = WarehouseRobot(start_pos=[start_pos[0], start_pos[1], 0.1])
 
     # 3. Setup Navigation
-    planner = AStarPlanner(RESOLUTION, MAP_WIDTH, MAP_HEIGHT)
+    if PLANNER == "astar":
+        planner = AStarPlanner(RESOLUTION, MAP_WIDTH, MAP_HEIGHT)
+    else:
+        planner = DStarLitePlanner(RESOLUTION, MAP_WIDTH, MAP_HEIGHT)
+    print(f"Planner: {PLANNER}")
     planner.set_obstacles(obstacles)
 
     # 4. Pick initial random goal and plan path

@@ -1,5 +1,8 @@
 import numpy as np
 
+# Planner selection: "dstar_lite" (default) or "astar"
+PLANNER = "dstar_lite"
+
 # Simulation settings
 TIME_STEP = 1./240.
 GRAVITY = -9.8
