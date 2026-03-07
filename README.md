@@ -4,18 +4,18 @@ A PyBullet-based simulation of an Autonomous Mobile Robot (AMR) navigating a war
 
 ## Features
 
-- **Three planners** — A\*, D\* Lite, and Neural D\* Lite (switchable via `config.py`)
-- **Neural heuristic** — a PyTorch MLP trained on ground-truth D\* Lite costs that replaces the Euclidean heuristic, cached to disk per map layout
-- **Pure Pursuit controller** — smooth path-following with speed tapering near waypoints
-- **Vision system** — robot-mounted camera with HSV-based colour detection (placeholder for a real ML detector)
-- **Autonomous loop** — robot continuously picks random reachable goals and replans on arrival
-- **Cost map visualiser** — renders the trained heuristic as a matplotlib heatmap (`show_cost_map.py`)
+- **Three planners** - A\*, D\* Lite, and Neural D\* Lite (switchable via `config.py`)
+- **Neural heuristic** - a PyTorch MLP trained on ground-truth D\* Lite costs that replaces the Euclidean heuristic, cached to disk per map layout
+- **Pure Pursuit controller** - smooth path-following with speed tapering near waypoints
+- **Vision system** - robot-mounted camera with HSV-based colour detection (placeholder for a real ML detector)
+- **Autonomous loop** - robot continuously picks random reachable goals and replans on arrival
+- **Cost map visualiser** - renders the trained heuristic as a matplotlib heatmap (`show_cost_map.py`)
 
 ## Project Structure
 
 ```
 amr_warehouse_sim/
-├── main.py                     # Entry point — simulation loop
+├── main.py                     # Entry point - simulation loop
 ├── config.py                   # All tunable parameters
 ├── show_cost_map.py            # Standalone heuristic cost map visualiser
 ├── requirements.txt
@@ -24,10 +24,10 @@ amr_warehouse_sim/
 │   ├── controller.py           # PurePursuitController
 │   └── neural_heuristic.py     # PyTorch MLP, training, feature encoding
 ├── simulation/
-│   ├── world.py                # WarehouseWorld — walls, shelves, obstacles
-│   └── robot.py                # WarehouseRobot — differential drive body
+│   ├── world.py                # WarehouseWorld - walls, shelves, obstacles
+│   └── robot.py                # WarehouseRobot - differential drive body
 └── perception/
-    └── vision.py               # VisionSystem — camera capture and target detection
+    └── vision.py               # VisionSystem - camera capture and target detection
 ```
 
 ## Requirements
@@ -70,15 +70,15 @@ All settings live in `config.py`:
 python show_cost_map.py
 ```
 
-Saves `cost_map.png` — a heatmap of predicted cost-to-goal from every free cell, with obstacles in black. Edit the `goal_world` variable in the script to change the goal position.
+Saves `cost_map.png` - a heatmap of predicted cost-to-goal from every free cell, with obstacles in black. Edit the `goal_world` variable in the script to change the goal position.
 
 ## Architecture Notes
 
 ### Planners
 
-- **AStarPlanner** — classic A\* with Euclidean heuristic, 8-connected grid.
-- **DStarLitePlanner** — incremental replanning; efficient for dynamic obstacles.
-- **NeuralDStarLitePlanner** — subclass of D\* Lite that replaces `_h()` with MLP inference. Falls back to Euclidean distance if training fails.
+- **AStarPlanner** - classic A\* with Euclidean heuristic, 8-connected grid.
+- **DStarLitePlanner** - incremental replanning; efficient for dynamic obstacles.
+- **NeuralDStarLitePlanner** - subclass of D\* Lite that replaces `_h()` with MLP inference. Falls back to Euclidean distance if training fails.
 
 ### Neural Heuristic
 
