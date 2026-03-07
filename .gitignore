@@ -5,3 +5,7 @@ __pycache__/
 
 # Cached neural heuristic weights (auto-generated at runtime)
 navigation/heuristic_*.npz
+navigation/heuristic_*.pt
+
+# Generated visualisations
+cost_map.png

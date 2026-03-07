@@ -27,6 +27,8 @@ import math
 import os
 
 import numpy as np
+import torch
+import torch.nn as nn
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -48,120 +50,61 @@ _MOVES = [(-1, 0), (1, 0), (0, -1), (0, 1),
 
 
 # ---------------------------------------------------------------------------
-# MLP — pure numpy, Adam optimiser
+# MLP — PyTorch nn.Module
 # ---------------------------------------------------------------------------
 
-class MLP:
+class MLP(nn.Module):
     """Tiny fully-connected network: ReLU hidden layers, linear output."""
 
     def __init__(self, layer_dims):
-        rng = np.random.default_rng(0)
-        self.weights, self.biases = [], []
+        super().__init__()
+        layers = []
         for i in range(len(layer_dims) - 1):
-            scale = np.sqrt(2.0 / layer_dims[i])   # He initialisation
-            self.weights.append(
-                rng.normal(0, scale, (layer_dims[i], layer_dims[i + 1])).astype(np.float32)
-            )
-            self.biases.append(np.zeros(layer_dims[i + 1], dtype=np.float32))
+            layers.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
+            if i < len(layer_dims) - 2:
+                layers.append(nn.ReLU())
+        self.net = nn.Sequential(*layers)
 
-    # ------------------------------------------------------------------
+    def forward(self, x):          # x: tensor (N, features)
+        return self.net(x)
 
-    def forward(self, x):
-        """x: 1-D feature vector or 2-D batch (N, features). Returns scalar or (N,)."""
-        h = np.atleast_2d(np.asarray(x, dtype=np.float32))
-        for i, (w, b) in enumerate(zip(self.weights, self.biases)):
-            h = h @ w + b
-            if i < len(self.weights) - 1:
-                h = np.maximum(0.0, h)          # ReLU
-        squeezed = h.squeeze()
-        return float(squeezed) if squeezed.ndim == 0 else squeezed
-
-    # ------------------------------------------------------------------
-
-    def train(self, X, y, epochs=TRAIN_EPOCHS, lr=TRAIN_LR, batch_size=TRAIN_BATCH):
-        X = np.asarray(X, dtype=np.float32)
-        y = np.asarray(y, dtype=np.float32)
-        n = X.shape[0]
-
-        # Adam state
-        mw = [np.zeros_like(w) for w in self.weights]
-        vw = [np.zeros_like(w) for w in self.weights]
-        mb = [np.zeros_like(b) for b in self.biases]
-        vb = [np.zeros_like(b) for b in self.biases]
-        b1, b2, eps = 0.9, 0.999, 1e-8
-        step = 0
-
+    def train_model(self, X, y, epochs=TRAIN_EPOCHS, lr=TRAIN_LR, batch_size=TRAIN_BATCH):
+        X_t = torch.tensor(X, dtype=torch.float32)
+        y_t = torch.tensor(y, dtype=torch.float32).unsqueeze(1)
+        dataset = torch.utils.data.TensorDataset(X_t, y_t)
+        loader  = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        opt     = torch.optim.Adam(self.parameters(), lr=lr)
+        loss_fn = nn.MSELoss()
+        self.train()
         for epoch in range(epochs):
-            perm       = np.random.permutation(n)
-            epoch_loss = 0.0
-            n_batches  = 0
-
-            for s in range(0, n, batch_size):
-                Xb = X[perm[s:s + batch_size]]
-                yb = y[perm[s:s + batch_size]]
-                bs = Xb.shape[0]
-                step += 1
-
-                # Forward pass — store pre-activations and activations
-                pre = []          # pre-activation (before ReLU / output)
-                act = [Xb]        # post-activation  (act[0] = input batch)
-                h = Xb
-                for i, (w, b) in enumerate(zip(self.weights, self.biases)):
-                    z = h @ w + b
-                    pre.append(z)
-                    h = np.maximum(0.0, z) if i < len(self.weights) - 1 else z
-                    act.append(h)
-
-                pred = act[-1].squeeze()
-                diff = pred - yb
-                epoch_loss += float(np.mean(diff ** 2))
-                n_batches  += 1
-
-                # Backward pass
-                delta = (2.0 / bs) * diff.reshape(-1, 1)
-
-                for i in range(len(self.weights) - 1, -1, -1):
-                    dw = act[i].T @ delta
-                    db = delta.sum(axis=0)
-
-                    # Propagate delta BEFORE weight update to avoid stale values
-                    if i > 0:
-                        new_delta = (delta @ self.weights[i].T) * (pre[i - 1] > 0)
-
-                    # Adam — weights
-                    mw[i] = b1 * mw[i] + (1 - b1) * dw
-                    vw[i] = b2 * vw[i] + (1 - b2) * dw ** 2
-                    self.weights[i] -= lr * (mw[i] / (1 - b1 ** step)) / (
-                        np.sqrt(vw[i] / (1 - b2 ** step)) + eps
-                    )
-
-                    # Adam — biases
-                    mb[i] = b1 * mb[i] + (1 - b1) * db
-                    vb[i] = b2 * vb[i] + (1 - b2) * db ** 2
-                    self.biases[i] -= lr * (mb[i] / (1 - b1 ** step)) / (
-                        np.sqrt(vb[i] / (1 - b2 ** step)) + eps
-                    )
-
-                    if i > 0:
-                        delta = new_delta
-
+            total = 0.0
+            for Xb, yb in loader:
+                opt.zero_grad()
+                loss = loss_fn(self(Xb), yb)
+                loss.backward()
+                opt.step()
+                total += loss.item()
             if (epoch + 1) % 50 == 0:
-                print(f"  [NeuralHeuristic] epoch {epoch + 1}/{epochs}  "
-                      f"MSE={epoch_loss / n_batches:.4f}")
-
-    # ------------------------------------------------------------------
+                print(f"  [NeuralHeuristic] epoch {epoch+1}/{epochs}  MSE={total/len(loader):.4f}")
 
     def save(self, path):
-        data = {f"w{i}": w for i, w in enumerate(self.weights)}
-        data.update({f"b{i}": b for i, b in enumerate(self.biases)})
-        np.savez(path, **data)
-        print(f"  [NeuralHeuristic] weights saved → {os.path.basename(path)}")
+        torch.save(self.state_dict(), path)
+        print(f"  [NeuralHeuristic] weights saved -> {os.path.basename(path)}")
 
     def load(self, path):
-        data = np.load(path)
-        for i in range(len(self.weights)):
-            self.weights[i] = data[f"w{i}"]
-            self.biases[i]  = data[f"b{i}"]
+        self.load_state_dict(torch.load(path, map_location='cpu', weights_only=True))
+
+
+# ---------------------------------------------------------------------------
+# Inference helper
+# ---------------------------------------------------------------------------
+
+def predict(nn_model, features):
+    """Numpy feature vector → float prediction."""
+    nn_model.eval()
+    with torch.no_grad():
+        t = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
+        return float(nn_model(t).squeeze().item())
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +251,7 @@ def collect_training_data(obstacles, width, height, n_episodes=N_TRAIN_EPISODES)
 def weights_path_for(obstacles):
     """Weights filename unique to this obstacle configuration."""
     key = hashlib.md5(str(sorted(obstacles)).encode()).hexdigest()[:12]
-    return os.path.join(WEIGHTS_DIR, f"heuristic_{key}.npz")
+    return os.path.join(WEIGHTS_DIR, f"heuristic_{key}.pt")
 
 
 def build_heuristic(obstacles, width, height):
@@ -332,6 +275,6 @@ def build_heuristic(obstacles, width, height):
         print("[NeuralHeuristic] no training data — falling back to Euclidean heuristic")
         return None
 
-    nn.train(X, y)
+    nn.train_model(X, y)
     nn.save(path)
     return nn

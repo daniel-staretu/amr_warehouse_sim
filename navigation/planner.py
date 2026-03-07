@@ -296,7 +296,7 @@ class NeuralDStarLitePlanner(DStarLitePlanner):
     def _h(self, a, b):
         if self._nn is None:
             return math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2)
-        from navigation.neural_heuristic import encode_features, ADMISSIBILITY_FACTOR
+        from navigation.neural_heuristic import encode_features, predict, ADMISSIBILITY_FACTOR
         features = encode_features(a, b, self.obstacles, self.width, self.height)
-        raw = float(self._nn.forward(features)) * self._norm
+        raw = predict(self._nn, features) * self._norm
         return max(0.0, raw * ADMISSIBILITY_FACTOR)
