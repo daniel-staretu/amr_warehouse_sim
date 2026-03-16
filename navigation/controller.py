@@ -12,6 +12,20 @@ class PurePursuitController:
         self.path = path
         self.last_index = 0
 
+    def set_path_near(self, path, robot_pos):
+        """Like set_path but starts tracking from the waypoint closest to robot_pos.
+        Use when splicing in a replanned path while the robot is still moving, so the
+        controller doesn't try to steer back to already-passed waypoints."""
+        self.path = path
+        if not path:
+            self.last_index = 0
+            return
+        rx, ry = robot_pos
+        best = min(range(len(path)),
+                   key=lambda i: math.hypot(path[i][0] - rx, path[i][1] - ry))
+        # Never skip past second-to-last so there is always a next waypoint to track
+        self.last_index = min(best, max(0, len(path) - 2))
+
     def compute_control(self, robot_state):
         if not self.path or len(self.path) < 2:
             return 0.0, 0.0

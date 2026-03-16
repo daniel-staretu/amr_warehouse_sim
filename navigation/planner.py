@@ -36,11 +36,13 @@ class HybridAStarPlanner:
 
     # ------------------------------------------------------------------
     def __init__(self, resolution, map_width, map_height):
-        self.resolution = resolution
-        self.width      = int(map_width  / resolution)
-        self.height     = int(map_height / resolution)
-        self._inflated  = set()      # grid cells blocked after C-space inflation
-        self._step      = resolution  # arc length per motion primitive (= one grid cell)
+        self.resolution      = resolution
+        self.width           = int(map_width  / resolution)
+        self.height          = int(map_height / resolution)
+        self._static_inflated  = set()   # cells from set_obstacles (never removed at runtime)
+        self._dynamic_inflated = set()   # cells from add_dynamic_obstacle (removable)
+        self._inflated         = set()   # union — what the planner actually checks
+        self._step             = resolution
 
     # ------------------------------------------------------------------
     # Coordinate helpers
@@ -67,14 +69,106 @@ class HybridAStarPlanner:
             raw.add(self.world_to_grid(ox, oy))
 
         r = math.ceil(ROBOT_RADIUS / self.resolution)
-        self._inflated.clear()
+        self._static_inflated.clear()
         for (gx, gy) in raw:
             for dx in range(-r, r + 1):
                 for dy in range(-r, r + 1):
                     if dx * dx + dy * dy <= (r + 0.5) ** 2:
                         nx, ny = gx + dx, gy + dy
                         if 0 <= nx < self.width and 0 <= ny < self.height:
-                            self._inflated.add((nx, ny))
+                            self._static_inflated.add((nx, ny))
+        self._inflated = self._static_inflated | self._dynamic_inflated
+
+    # ------------------------------------------------------------------
+    # Dynamic obstacle management
+    # ------------------------------------------------------------------
+
+    def _inflate_cell(self, gx, gy):
+        """Return the set of C-space cells produced by inflating grid cell (gx, gy)."""
+        r = math.ceil(ROBOT_RADIUS / self.resolution)
+        cells = set()
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if dx * dx + dy * dy <= (r + 0.5) ** 2:
+                    nx, ny = gx + dx, gy + dy
+                    if 0 <= nx < self.width and 0 <= ny < self.height:
+                        cells.add((nx, ny))
+        return cells
+
+    def add_dynamic_obstacle(self, wx, wy):
+        """
+        Register a newly detected dynamic obstacle at world position (wx, wy).
+        Inflates by ROBOT_RADIUS and adds to the live cost map immediately.
+        Call plan() again after adding obstacles to get a replanned path.
+        """
+        gx, gy = self.world_to_grid(wx, wy)
+        new_cells = self._inflate_cell(gx, gy)
+        self._dynamic_inflated |= new_cells
+        self._inflated         |= new_cells
+
+    def remove_dynamic_obstacles(self):
+        """
+        Clear all runtime-added obstacles, restoring the static-only cost map.
+        Useful at the start of each replanning cycle when using an obstacle
+        tracker that provides a complete fresh set of detections each frame.
+        """
+        self._dynamic_inflated.clear()
+        self._inflated = set(self._static_inflated)
+
+    # ------------------------------------------------------------------
+    # Path validation — replanning trigger
+    # ------------------------------------------------------------------
+
+    def _segment_free(self, a, b, obstacle_set):
+        """
+        Bresenham ray-cast from grid cell a to b.
+        Returns True if no cell in obstacle_set lies on the segment.
+        """
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        x, y = x0, y0
+        while True:
+            if (x, y) in obstacle_set:
+                return False
+            if x == x1 and y == y1:
+                return True
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+    def path_is_blocked(self, path):
+        """
+        Return True if the current path passes through any dynamic obstacle cell.
+
+        Checks are made against _dynamic_inflated only — static obstacles were
+        already avoided during planning so they never trigger a false positive.
+
+        Both waypoint positions and the straight-line segments between them are
+        tested (Bresenham), so an obstacle sitting between two waypoints is caught
+        even when it doesn't coincide exactly with a waypoint.
+        """
+        if not self._dynamic_inflated:
+            return False   # fast-path: no dynamic obstacles present
+
+        for i, wp in enumerate(path):
+            gx, gy = self.world_to_grid(wp[0], wp[1])
+            if (gx, gy) in self._dynamic_inflated:
+                return True
+            if i < len(path) - 1:
+                a = self.world_to_grid(wp[0], wp[1])
+                b = self.world_to_grid(path[i + 1][0], path[i + 1][1])
+                if not self._segment_free(a, b, self._dynamic_inflated):
+                    return True
+        return False
 
     # ------------------------------------------------------------------
     # Kinematic helpers
@@ -387,6 +481,355 @@ class DStarLitePlanner:
 
         path.append(self.grid_to_world(*self._goal))
         return path
+
+
+# ---------------------------------------------------------------------------
+# Kinodynamic D* Lite Planner
+# ---------------------------------------------------------------------------
+
+class KinoDStarLitePlanner(DStarLitePlanner):
+    """
+    D* Lite extended with kinodynamic-quality path post-processing.
+
+    Stages applied after the base grid search:
+      1. C-space inflation   — identical to HybridAStarPlanner, so the robot
+                               centre never enters an obstacle cell.
+      2. Theta* smoothing    — Bresenham line-of-sight pass removes unnecessary
+                               grid-aligned turns, giving any-angle straight legs.
+      3. Turning-radius arcs — sharp corners are replaced with circular arc
+                               samples so no heading change requires a tighter
+                               turn than R_min = MAX_SPEED / MAX_STEERING.
+      4. Path validation     — every waypoint is confirmed free; blocked points
+                               fall back to the nearest raw grid waypoint.
+      5. Heading annotation  — each waypoint is returned as (x, y, theta) where
+                               theta points toward the next waypoint.
+
+    Output: list of (x, y, theta) tuples — compatible with PurePursuitController
+    without any changes to controller.py.
+
+    Dynamic-obstacle interface
+    --------------------------
+    update_dynamic_obstacles(dynamic_obs) ingests new (x, y) detections (e.g.
+    from a YOLO detector) into the inflated cost map.  Call plan() afterwards
+    to get a replanned path.  The incremental D* Lite update mechanism is
+    scaffolded here and marked TODO for full implementation.
+    """
+
+    def __init__(self, resolution, map_width, map_height):
+        super().__init__(resolution, map_width, map_height)
+        self._static_inflated  = set()
+        self._dynamic_inflated = set()
+        self._inflated         = set()
+
+    # ------------------------------------------------------------------
+    # Obstacle management
+    # ------------------------------------------------------------------
+
+    def set_obstacles(self, obstacle_list):
+        """Build inflated C-space from the static obstacle list."""
+        raw = set()
+        for ox, oy in obstacle_list:
+            raw.add(self.world_to_grid(ox, oy))
+
+        r = math.ceil(ROBOT_RADIUS / self.resolution)
+        self._static_inflated.clear()
+        for gx, gy in raw:
+            for dx in range(-r, r + 1):
+                for dy in range(-r, r + 1):
+                    if dx * dx + dy * dy <= (r + 0.5) ** 2:
+                        nx, ny = gx + dx, gy + dy
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            self._static_inflated.add((nx, ny))
+
+        self._inflated = self._static_inflated | self._dynamic_inflated
+        self.obstacles = set(self._inflated)
+
+    def is_free(self, wx, wy, clearance=0):
+        """True if (wx, wy) is outside all inflated obstacle cells."""
+        gx, gy = self.world_to_grid(wx, wy)
+        r = math.ceil(clearance / self.resolution)
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if dx * dx + dy * dy <= (r + 0.5) ** 2:
+                    if (gx + dx, gy + dy) in self._inflated:
+                        return False
+        return 0 <= gx < self.width and 0 <= gy < self.height
+
+    def _inflate_cell(self, gx, gy):
+        """Return C-space cells produced by inflating grid cell (gx, gy)."""
+        r = math.ceil(ROBOT_RADIUS / self.resolution)
+        cells = set()
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if dx * dx + dy * dy <= (r + 0.5) ** 2:
+                    nx, ny = gx + dx, gy + dy
+                    if 0 <= nx < self.width and 0 <= ny < self.height:
+                        cells.add((nx, ny))
+        return cells
+
+    def add_dynamic_obstacle(self, wx, wy):
+        """
+        Register a newly detected dynamic obstacle at world position (wx, wy).
+        Inflates by ROBOT_RADIUS and adds to the live cost map immediately.
+        Call plan() again after adding obstacles to get a replanned path.
+
+        TODO: wire into D* Lite's incremental vertex-update mechanism
+              so only the affected search-tree nodes are repaired.
+        """
+        gx, gy = self.world_to_grid(wx, wy)
+        new_cells = self._inflate_cell(gx, gy)
+        self._dynamic_inflated |= new_cells
+        self._inflated         |= new_cells
+        self.obstacles          = set(self._inflated)
+
+    def remove_dynamic_obstacles(self):
+        """
+        Clear all runtime-added obstacles, restoring the static-only cost map.
+        Call before ingesting a fresh set of detections each frame.
+        """
+        self._dynamic_inflated.clear()
+        self._inflated = set(self._static_inflated)
+        self.obstacles = set(self._inflated)
+
+    # ------------------------------------------------------------------
+    # Path validation — replanning trigger
+    # ------------------------------------------------------------------
+
+    def _segment_free(self, a, b, obstacle_set):
+        """Bresenham ray-cast from a to b; True if no cell in obstacle_set is hit."""
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        x, y = x0, y0
+        while True:
+            if (x, y) in obstacle_set:
+                return False
+            if x == x1 and y == y1:
+                return True
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+    def path_is_blocked(self, path):
+        """
+        Return True if the current path passes through any dynamic obstacle cell.
+        Checks waypoint positions and Bresenham segments between them.
+        """
+        if not self._dynamic_inflated:
+            return False
+        for i, wp in enumerate(path):
+            gx, gy = self.world_to_grid(wp[0], wp[1])
+            if (gx, gy) in self._dynamic_inflated:
+                return True
+            if i < len(path) - 1:
+                a = self.world_to_grid(wp[0], wp[1])
+                b = self.world_to_grid(path[i + 1][0], path[i + 1][1])
+                if not self._segment_free(a, b, self._dynamic_inflated):
+                    return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Stage 1 — Theta* any-angle smoothing
+    # ------------------------------------------------------------------
+
+    def _line_of_sight(self, a, b):
+        """
+        Bresenham ray-cast from grid cell a to grid cell b on the inflated grid.
+        Returns True if every cell along the segment is free.
+        """
+        x0, y0 = a
+        x1, y1 = b
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x1 >= x0 else -1
+        sy = 1 if y1 >= y0 else -1
+        err = dx - dy
+        x, y = x0, y0
+        while True:
+            if (x, y) in self._inflated:
+                return False
+            if x == x1 and y == y1:
+                return True
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x += sx
+            if e2 < dx:
+                err += dx
+                y += sy
+
+    def _smooth_path(self, grid_path):
+        """
+        Theta* greedy pass: repeatedly anchor at the last kept waypoint and
+        skip forward as far as line-of-sight holds, yielding any-angle segments.
+        """
+        if len(grid_path) <= 2:
+            return grid_path
+        smoothed = [grid_path[0]]
+        i = 0
+        while i < len(grid_path) - 1:
+            j = len(grid_path) - 1
+            while j > i + 1:
+                if self._line_of_sight(smoothed[-1], grid_path[j]):
+                    break
+                j -= 1
+            smoothed.append(grid_path[j])
+            i = j
+        return smoothed
+
+    # ------------------------------------------------------------------
+    # Stage 2 — Heading annotation
+    # ------------------------------------------------------------------
+
+    def _add_headings(self, world_path, start_heading):
+        """
+        Convert a list of (x, y) waypoints into (x, y, theta) tuples where
+        theta is the heading toward the next waypoint.  The last waypoint
+        inherits the heading of the final segment.
+        """
+        if not world_path:
+            return []
+        result = []
+        for i in range(len(world_path) - 1):
+            x,  y  = world_path[i]
+            nx, ny = world_path[i + 1]
+            result.append((x, y, math.atan2(ny - y, nx - x)))
+        last = world_path[-1]
+        last_theta = result[-1][2] if result else (start_heading or 0.0)
+        result.append((last[0], last[1], last_theta))
+        return result
+
+    # ------------------------------------------------------------------
+    # Stage 3 — Turning-radius enforcement
+    # ------------------------------------------------------------------
+
+    def _enforce_turning_radius(self, world_path, min_radius):
+        """
+        Walk the smoothed path and replace any corner whose required turning
+        radius is tighter than min_radius with a circular arc sampled at
+        resolution * 0.5 m intervals.  Arc points that land inside a blocked
+        cell are silently skipped so obstacle avoidance is never compromised.
+        """
+        if len(world_path) <= 2 or min_radius <= 0:
+            return world_path
+
+        ARC_STEP = self.resolution * 0.5
+        result = [world_path[0]]
+
+        for i in range(1, len(world_path) - 1):
+            A = result[-1]
+            B = world_path[i]
+            C = world_path[i + 1]
+
+            dist_AB = math.hypot(B[0] - A[0], B[1] - A[1])
+            dist_BC = math.hypot(C[0] - B[0], C[1] - B[1])
+            if dist_AB < 1e-6 or dist_BC < 1e-6:
+                result.append(B)
+                continue
+
+            h1 = math.atan2(B[1] - A[1], B[0] - A[0])
+            h2 = math.atan2(C[1] - B[1], C[0] - B[0])
+            delta = (h2 - h1 + math.pi) % (2 * math.pi) - math.pi
+
+            if abs(delta) < 1e-4:
+                result.append(B)
+                continue
+
+            # Tangent offset d = R * tan(|delta| / 2), clamped to half each leg
+            d = min_radius * abs(math.tan(delta / 2))
+            d = min(d, dist_AB * 0.5, dist_BC * 0.5)
+            if d < 1e-3:
+                result.append(B)
+                continue
+
+            # Tangent points on the incoming / outgoing legs
+            t1 = (B[0] - d * math.cos(h1), B[1] - d * math.sin(h1))
+            t2 = (B[0] + d * math.cos(h2), B[1] + d * math.sin(h2))
+
+            # Arc centre: perpendicular to h1 at T1 (sign follows turn direction)
+            sign = math.copysign(1.0, delta)
+            perp = h1 + sign * math.pi / 2
+            arc_cx = t1[0] + min_radius * math.cos(perp)
+            arc_cy = t1[1] + min_radius * math.sin(perp)
+
+            a_start = math.atan2(t1[1] - arc_cy, t1[0] - arc_cx)
+            a_end   = math.atan2(t2[1] - arc_cy, t2[0] - arc_cx)
+            arc_span = (a_end - a_start + math.pi) % (2 * math.pi) - math.pi
+            if arc_span * delta < 0:
+                arc_span += sign * 2 * math.pi
+
+            n_steps = max(2, int(math.ceil(min_radius * abs(arc_span) / ARC_STEP)))
+            for k in range(n_steps + 1):
+                angle = a_start + (k / n_steps) * arc_span
+                px = arc_cx + min_radius * math.cos(angle)
+                py = arc_cy + min_radius * math.sin(angle)
+                gx, gy = self.world_to_grid(px, py)
+                if ((gx, gy) not in self._inflated and
+                        0 <= gx < self.width and 0 <= gy < self.height):
+                    result.append((px, py))
+
+        result.append(world_path[-1])
+        return result
+
+    # ------------------------------------------------------------------
+    # Stage 4 — Path validation
+    # ------------------------------------------------------------------
+
+    def _validate_path(self, smoothed_world, raw_world):
+        """
+        Confirm every waypoint is outside the inflated obstacle set.
+        Any blocked waypoint is replaced with the nearest raw grid waypoint
+        and a warning is printed, so the path always degrades gracefully.
+        """
+        validated = []
+        for wx, wy in smoothed_world:
+            gx, gy = self.world_to_grid(wx, wy)
+            if ((gx, gy) in self._inflated or
+                    not (0 <= gx < self.width and 0 <= gy < self.height)):
+                print(f"Warning [KinoDStarLite]: waypoint ({wx:.2f}, {wy:.2f}) "
+                      f"is inside an obstacle — falling back to raw segment.")
+                best = min(raw_world,
+                           key=lambda p: math.hypot(p[0] - wx, p[1] - wy))
+                validated.append(best)
+            else:
+                validated.append((wx, wy))
+        return validated
+
+    # ------------------------------------------------------------------
+    # Public plan() — orchestrates all post-processing stages
+    # ------------------------------------------------------------------
+
+    def plan(self, start_pos, goal_pos, start_heading=None):
+        # Restore a clean obstacle set (base plan() permanently discards
+        # the start / goal cells from self.obstacles on each call).
+        self.obstacles = set(self._inflated)
+
+        raw_world = super().plan(start_pos, goal_pos, start_heading)
+        if not raw_world:
+            return []
+
+        # Stage 1 — Theta* any-angle smoothing (operates in grid space)
+        grid_path     = [self.world_to_grid(wx, wy) for wx, wy in raw_world]
+        smoothed_grid = self._smooth_path(grid_path)
+        smoothed_world = [self.grid_to_world(gx, gy) for gx, gy in smoothed_grid]
+
+        # Stage 2 — Validate smoothed waypoints; patch with raw fallback
+        smoothed_world = self._validate_path(smoothed_world, raw_world)
+
+        # Stage 3 — Insert arc waypoints at corners tighter than R_min
+        min_radius = MAX_SPEED / MAX_STEERING
+        smoothed_world = self._enforce_turning_radius(smoothed_world, min_radius)
+
+        # Stage 4 — Annotate with headings → (x, y, theta)
+        return self._add_headings(smoothed_world, start_heading)
 
 
 # ---------------------------------------------------------------------------

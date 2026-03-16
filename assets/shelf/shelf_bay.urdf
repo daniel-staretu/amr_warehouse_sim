@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<robot name="shelf_bay">
+  <!--
+    OBJ units: centimetres, Y-up.
+    OBJ extents: X 104 cm (width/bay), Y 160.5 cm (height), Z 39 cm (depth).
+
+    meshScale maps OBJ axes to metres and stretches to target warehouse dims:
+      OBJ X * 0.01       -> 1.04 m  (one bay, tiled 10x to make 10 m run)
+      OBJ Y * 0.015575   -> 2.5  m  (shelf height)
+      OBJ Z * 0.038462   -> 1.5  m  (shelf depth, E-W)
+
+    rpy="1.5708 0 1.5708" (roll 90 deg then yaw 90 deg) rotates Y-up OBJ
+    into Z-up PyBullet:  OBJ X -> PB Y,  OBJ Y -> PB Z,  OBJ Z -> PB X.
+
+    After rotation the mesh centre sits at (0.75, 0, 1.25) in the link frame.
+    xyz="-0.75 0 0" in the visual origin shifts it to (0, 0, 1.25) so the
+    link origin can be placed at ground level, centred on the shelf column.
+  -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="-0.75 0 0" rpy="1.5708 0 1.5708"/>
+      <geometry>
+        <mesh filename="eb_metal_shelf_01.obj" scale="0.01 0.015575 0.038462"/>
+      </geometry>
+    </visual>
+    <collision>
+      <origin xyz="0 0 1.25" rpy="0 0 0"/>
+      <geometry>
+        <box size="1.5 1.04 2.5"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="1000"/>
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+  </link>
+</robot>

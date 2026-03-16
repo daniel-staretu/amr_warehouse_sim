@@ -11,16 +11,16 @@ class VisionSystem:
         self.aspect = CAMERA_WIDTH / CAMERA_HEIGHT
         self.proj_matrix = p.computeProjectionMatrixFOV(CAMERA_FOV, self.aspect, 0.1, 100.0)
 
-    def get_camera_image(self):
-        # Get Camera position (mounted on robot)
+    def _capture(self):
+        """Shared capture — returns (rgb_hwc, depth_hw) as numpy arrays."""
         pos, orn = p.getBasePositionAndOrientation(self.robot_id)
         rot_mat = p.getMatrixFromQuaternion(orn)
 
-        cam_pos = [pos[0], pos[1], pos[2] + 0.5]
-        forward_vec = [rot_mat[0], rot_mat[3], rot_mat[6]]
-        target_pos = [cam_pos[0] + forward_vec[0],
-                      cam_pos[1] + forward_vec[1],
-                      cam_pos[2] + forward_vec[2]]
+        cam_pos      = [pos[0], pos[1], pos[2] + CAMERA_Z_OFFSET]
+        forward_vec  = [rot_mat[0], rot_mat[3], rot_mat[6]]
+        target_pos   = [cam_pos[0] + forward_vec[0],
+                        cam_pos[1] + forward_vec[1],
+                        cam_pos[2] + forward_vec[2]]
 
         view_matrix = p.computeViewMatrix(cam_pos, target_pos, [0, 0, 1])
 
@@ -30,14 +30,21 @@ class VisionSystem:
             renderer=p.ER_BULLET_HARDWARE_OPENGL
         )
 
-        # 1. Convert to numpy array
-        image = np.array(rgb, dtype=np.uint8)
-        # 2. Reshape to include Alpha
-        image = np.reshape(image, (h, w, 4))
-        # 3. Slice to RGB AND force a contiguous copy for OpenCV compatibility
-        image = np.ascontiguousarray(image[:, :, :3])
+        rgb_arr   = np.ascontiguousarray(
+            np.array(rgb, dtype=np.uint8).reshape(h, w, 4)[:, :, :3])
+        depth_arr = np.array(depth, dtype=np.float32).reshape(h, w)
+        return rgb_arr, depth_arr
 
-        return image
+    def get_camera_image(self):
+        """Return the RGB frame (H x W x 3, uint8). Kept for backward compatibility."""
+        rgb, _ = self._capture()
+        return rgb
+
+    def get_camera_data(self):
+        """Return (rgb, depth) where depth is an H x W float32 array of
+        raw PyBullet depth-buffer values in [0, 1].
+        Pass depth to ObstacleLocalizer.unproject_pixel / bbox_to_world."""
+        return self._capture()
 
     def detect_target(self, image):
         """
