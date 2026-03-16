@@ -1,7 +1,7 @@
 import numpy as np
 
-# Planner selection: "dstar_lite" (default) or "astar"
-PLANNER = "neural_dstar_lite"
+# Planner selection: "hybrid_astar" (kinodynamic), "dstar_lite", or "astar"
+PLANNER = "hybrid_astar"
 
 # Simulation settings
 TIME_STEP = 1./240.
@@ -9,20 +9,22 @@ GRAVITY = -9.8
 GUI_MODE = True  # Set to False for headless training
 
 # Map settings
-MAP_WIDTH = 20   # meters
-MAP_HEIGHT = 20  # meters
+MAP_WIDTH = 50   # meters
+MAP_HEIGHT = 40  # meters
 RESOLUTION = 1 # meters per grid cell (lower = finer path, slower calc)
 
 # Robot settings
 ROBOT_RADIUS = 0.3
 WHEEL_RADIUS = 0.1
 AXLE_LENGTH = 0.5
-MAX_SPEED = 2.0     # m/s
+MAX_SPEED = 3.5     # m/s
 MAX_STEERING = 3.0  # rad/s
 
 # Navigation
-LOOKAHEAD_DISTANCE = 1.5  # Pure Pursuit lookahead (must be > RESOLUTION to see ahead)
-GOAL_THRESHOLD = 0.4      # Distance to consider goal reached
+LOOKAHEAD_DISTANCE = 1.5  # waypoint advancement threshold
+GOAL_THRESHOLD     = 0.4  # distance to consider goal reached
+K_HEADING = 3.0           # angular gain for heading error   (rad/s per rad)
+K_CTE     = 1.5           # angular gain for cross-track error (rad/s per m)
 
 # Vision
 CAMERA_WIDTH = 320

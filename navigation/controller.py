@@ -13,55 +13,65 @@ class PurePursuitController:
         self.last_index = 0
 
     def compute_control(self, robot_state):
-        # robot_state: [x, y, yaw]
-        if not self.path or self.last_index >= len(self.path):
-            return 0.0, 0.0  # Stop
+        if not self.path or len(self.path) < 2:
+            return 0.0, 0.0
 
         rx, ry, ryaw = robot_state
 
-        # 1. Advance last_index past any waypoints the robot has already reached.
-        #    This prevents steering toward a point that is now behind the robot.
+        # --- Advance past waypoints the robot has already passed ---
         while self.last_index < len(self.path) - 1:
             dist = math.hypot(self.path[self.last_index][0] - rx,
                               self.path[self.last_index][1] - ry)
-            if dist < LOOKAHEAD_DISTANCE:
+            if dist < LOOKAHEAD_DISTANCE * 0.5:
                 self.last_index += 1
             else:
                 break
 
-        # 2. Find the first path point beyond the lookahead distance.
-        #    Fall back to the final waypoint if all remaining points are closer.
-        target_point = self.path[-1]
-        for i in range(self.last_index, len(self.path)):
-            dist = math.hypot(self.path[i][0] - rx, self.path[i][1] - ry)
-            if dist >= LOOKAHEAD_DISTANCE:
-                target_point = self.path[i]
-                break
+        # --- Steering ---
+        if self.last_index >= len(self.path) - 1:
+            # Final waypoint: steer directly toward it
+            tx, ty = self.path[-1]
+            e_heading = math.atan2(ty - ry, tx - rx) - ryaw
+            e_heading = (e_heading + math.pi) % (2 * math.pi) - math.pi
+            angular_vel = np.clip(K_HEADING * e_heading, -MAX_STEERING, MAX_STEERING)
+        else:
+            # Safety: skip zero-length segments
+            while (self.last_index < len(self.path) - 2 and
+                   math.hypot(self.path[self.last_index + 1][0] - self.path[self.last_index][0],
+                               self.path[self.last_index + 1][1] - self.path[self.last_index][1]) < 1e-6):
+                self.last_index += 1
 
-        # 3. Calculate heading error (alpha)
-        tx, ty = target_point
+            i = self.last_index
+            px, py = self.path[i]
+            qx, qy = self.path[i + 1]
 
-        angle_to_target = math.atan2(ty - ry, tx - rx)
-        alpha = angle_to_target - ryaw
+            # Heading error: robot vs path-segment tangent
+            path_heading = math.atan2(qy - py, qx - px)
+            e_heading = (path_heading - ryaw + math.pi) % (2 * math.pi) - math.pi
 
-        # Normalize angle to [-pi, pi]
-        alpha = (alpha + np.pi) % (2 * np.pi) - np.pi
+            # Cross-track error: signed perpendicular distance to segment.
+            # Positive when the robot is to the right of the path direction.
+            seg_dx, seg_dy = qx - px, qy - py
+            seg_len = math.hypot(seg_dx, seg_dy)
+            if seg_len > 1e-9:
+                rnx =  seg_dy / seg_len
+                rny = -seg_dx / seg_len
+                e_cte = (rx - px) * rnx + (ry - py) * rny
+            else:
+                e_cte = 0.0
 
-        # 4. Compute controls
-        # For pure pursuit: curvature = 2*sin(alpha) / Lookahead
+            angular_vel = np.clip(
+                K_HEADING * e_heading + K_CTE * e_cte,
+                -MAX_STEERING, MAX_STEERING
+            )
 
-        linear_vel = MAX_SPEED
-        angular_vel = 2.0 * linear_vel * math.sin(alpha) / LOOKAHEAD_DISTANCE
-
-        # Cap Steering
-        angular_vel = np.clip(angular_vel, -MAX_STEERING, MAX_STEERING)
-
-        # Slow down if approaching end
+        # --- Forward speed (taper near goal) ---
         dist_to_goal = math.hypot(self.path[-1][0] - rx, self.path[-1][1] - ry)
         if dist_to_goal < LOOKAHEAD_DISTANCE:
             linear_vel = MAX_SPEED * (dist_to_goal / LOOKAHEAD_DISTANCE)
             if dist_to_goal < GOAL_THRESHOLD:
-                linear_vel = 0
-                angular_vel = 0
+                return 0.0, 0.0
+        else:
+            linear_vel = MAX_SPEED
 
         return linear_vel, angular_vel
