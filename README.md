@@ -22,7 +22,8 @@ amr_warehouse_sim/
 ├── requirements.txt
 ├── navigation/
 │   ├── planner.py              # HybridAStarPlanner, DStarLitePlanner, AStarPlanner
-│   └── controller.py           # Path-tangent tracking controller
+│   ├── controller.py           # Path-tangent tracking controller
+│   └── replanner.py            # replan_to_goal, find_detour, pick_random_goal
 ├── simulation/
 │   ├── world.py                # WarehouseWorld - walls and shelving layout
 │   └── robot.py                # WarehouseRobot - differential drive body

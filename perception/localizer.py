@@ -23,6 +23,20 @@ Coordinate conventions
 import math
 import numpy as np
 
+
+def has_new_obstacle(current_positions, known_positions, tolerance=1.0):
+    """Return True if any position in current_positions is further than
+    tolerance from every position in known_positions.
+
+    Used to suppress repeated replanning when the localiser shifts its
+    estimate of the same physical obstacle as the robot approaches it.
+    """
+    for cx, cy in current_positions:
+        if not any(math.hypot(cx - kx, cy - ky) < tolerance
+                   for kx, ky in known_positions):
+            return True
+    return False
+
 from config import (
     CAMERA_FOV, CAMERA_WIDTH, CAMERA_HEIGHT,
     CAMERA_NEAR, CAMERA_FAR,
