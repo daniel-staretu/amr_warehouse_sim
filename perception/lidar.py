@@ -270,8 +270,11 @@ class LidarSensor:
 
         dist = np.hypot(lx, ly)
         t = np.clip(dist / LIDAR_MAX_RANGE, 0.0, 1.0).astype(np.float64)
-        # PyBullet debug points use RGB: blue (close) → yellow (far)
-        colors = np.stack([t, t, 1.0 - t], axis=1)
+        # blue→green→yellow: saturated hues fill the mid-range
+        r = np.where(t <= 0.5, 0.0,          2.0 * (t - 0.5))
+        g = np.where(t <= 0.5, 2.0 * t,      1.0)
+        b = np.where(t <= 0.5, 1.0 - 2.0*t,  0.0)
+        colors = np.stack([r, g, b], axis=1)
 
         self._dbg_pts_id = p.addUserDebugPoints(
             world_pos.tolist(), colors.tolist(), pointSize=2
@@ -313,22 +316,23 @@ class LidarSensor:
         Output: (16*_RI_SCALE_H) x (360*_RI_SCALE_W) x 3  uint8
         """
         H, W = range_img.shape
-        canvas = np.zeros((H, W, 3), np.uint8)
+        out_h = H * _RI_SCALE_H
+        out_w = W * _RI_SCALE_W
+        canvas = np.zeros((out_h, out_w, 3), np.uint8)
 
         hit = range_img > 0
         if hit.any():
-            t = np.clip(range_img / LIDAR_MAX_RANGE, 0.0, 1.0)
-            canvas[..., 0] = np.where(hit, (1.0 - t) * 255, 0).astype(np.uint8)  # B
-            canvas[..., 1] = np.where(hit, t * 255,         0).astype(np.uint8)  # G
-            canvas[..., 2] = np.where(hit, t * 255,         0).astype(np.uint8)  # R
-
-        canvas = np.flipud(canvas)
-
-        canvas = cv2.resize(
-            canvas,
-            (W * _RI_SCALE_W, H * _RI_SCALE_H),
-            interpolation=cv2.INTER_NEAREST,
-        )
+            rows, cols = np.where(hit)
+            t = np.clip(range_img[rows, cols] / LIDAR_MAX_RANGE, 0.0, 1.0)
+            b = np.where(t <= 0.5, 1.0 - 2.0*t, 0.0)
+            g = np.where(t <= 0.5, 2.0 * t,     1.0)
+            r = np.where(t <= 0.5, 0.0,          2.0 * (t - 0.5))
+            # flip rows so highest elevation is at top
+            flipped_rows = (H - 1 - rows) * _RI_SCALE_H + _RI_SCALE_H // 2
+            px_cols      = cols * _RI_SCALE_W  + _RI_SCALE_W  // 2
+            canvas[flipped_rows, px_cols, 0] = (b * 255).astype(np.uint8)
+            canvas[flipped_rows, px_cols, 1] = (g * 255).astype(np.uint8)
+            canvas[flipped_rows, px_cols, 2] = (r * 255).astype(np.uint8)
 
         cv2.putText(canvas, 'RANGE IMAGE  (azimuth x elevation)',
                     (8, 14), cv2.FONT_HERSHEY_PLAIN, 0.9, (200, 200, 200), 1)
@@ -380,9 +384,12 @@ class LidarSensor:
 
             dist = np.hypot(lx_arr, ly_arr)
             t = np.clip(dist / LIDAR_MAX_RANGE, 0.0, 1.0).astype(np.float32)
-            canvas[py_arr, px_arr, 0] = ((1.0 - t) * 255).astype(np.uint8)  # B
-            canvas[py_arr, px_arr, 1] = (t * 255).astype(np.uint8)           # G
-            canvas[py_arr, px_arr, 2] = (t * 255).astype(np.uint8)           # R
+            b = np.where(t <= 0.5, 1.0 - 2.0*t, 0.0)
+            g = np.where(t <= 0.5, 2.0 * t,     1.0)
+            r = np.where(t <= 0.5, 0.0,          2.0 * (t - 0.5))
+            canvas[py_arr, px_arr, 0] = (b * 255).astype(np.uint8)  # B
+            canvas[py_arr, px_arr, 1] = (g * 255).astype(np.uint8)  # G
+            canvas[py_arr, px_arr, 2] = (r * 255).astype(np.uint8)  # R
 
         cv2.circle(canvas, (cx, cy), 8, (255, 255, 255), -1)
         cv2.arrowedLine(canvas, (cx, cy), (cx, cy - 22),
