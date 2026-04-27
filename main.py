@@ -1,6 +1,7 @@
 import pybullet as p
 import time
 import math
+import random
 import threading
 
 from config import *
@@ -10,6 +11,7 @@ from navigation.planner import AStarPlanner, DStarLitePlanner, HybridAStarPlanne
 from navigation.controller import PurePursuitController
 from navigation.replanner import to_xy, pick_random_goal, replan_to_goal, find_detour
 from perception.lidar import LidarSensor
+from perception.image_collector import ImageCollector
 from perception.localizer import has_new_obstacle
 
 # ---------------------------------------------------------------------------
@@ -36,6 +38,21 @@ SCATTERED_CRATES = [
     ( 4.0, -6.0),   # south aisle between x=0 and x=8 columns
 ]
 
+def pick_random_start(obstacles):
+    """Return a random free grid position for the robot spawn point."""
+    obs_set = set(obstacles)
+    free = []
+    x = -(MAP_WIDTH / 2)
+    while x <= MAP_WIDTH / 2:
+        y = -(MAP_HEIGHT / 2)
+        while y <= MAP_HEIGHT / 2:
+            if (x, y) not in obs_set:
+                free.append((x, y))
+            y += RESOLUTION
+        x += RESOLUTION
+    return random.choice(free)
+
+
 def draw_path(path):
     """Draw path as blue debug lines. Returns list of debug item IDs."""
     line_ids = []
@@ -57,9 +74,9 @@ def clear_path(line_ids):
 
 def main():
     # 1. Setup Simulation
-    # LIDAR_VIEW_ENABLED replaces the 3-D PyBullet window with the OpenCV
-    # LiDAR panels, so connect headless in that case.
-    if GUI_MODE and not LIDAR_VIEW_ENABLED:
+    # SENSOR_VIEW_ENABLED replaces the 3-D PyBullet window with the OpenCV
+    # sensor panels, so connect headless in that case.
+    if GUI_MODE and not SENSOR_VIEW_ENABLED:
         p.connect(p.GUI)
     else:
         p.connect(p.DIRECT)
@@ -76,10 +93,15 @@ def main():
         for cx, cy in SCATTERED_CRATES:
             world.add_target_crate(cx, cy)
 
-    # 2. Spawn Robot (fixed starting position)
-    start_pos = [-12, -13]
-    robot = WarehouseRobot(start_pos=[start_pos[0], start_pos[1], 0.1])
-    lidar = LidarSensor(robot.id, world)
+    # 2. Spawn Robot
+    if OBSTACLE_TEST_MODE:
+        start_xy = (-12.0, -13.0)
+    else:
+        start_xy = pick_random_start(obstacles)
+    print(f"Start position: ({start_xy[0]:.2f}, {start_xy[1]:.2f})")
+    robot           = WarehouseRobot(start_pos=[start_xy[0], start_xy[1], 0.1])
+    lidar           = LidarSensor(robot.id, world)
+    image_collector = ImageCollector(robot.id, world)
 
     # 3. Setup Navigation
     if PLANNER == "astar":
@@ -177,9 +199,10 @@ def main():
             v, omega = controller.compute_control(robot_state)
             robot.apply_control(v, omega)
 
-            # LiDAR scan + dynamic obstacle registration + replan trigger (10 Hz)
+            # LiDAR scan + image capture + dynamic obstacle registration (10 Hz)
             if step % LIDAR_INTERVAL == 0:
-                points, _ = lidar.scan()
+                cam_frame = image_collector.capture(robot_state)
+                points, _ = lidar.scan(camera_frame=cam_frame)
 
                 with _replan_lock:
                     replan_active = _replan['active']
@@ -206,7 +229,7 @@ def main():
                         ).start()
 
             # Follow robot with GUI camera
-            if GUI_MODE and not LIDAR_VIEW_ENABLED:
+            if GUI_MODE and not SENSOR_VIEW_ENABLED:
                 p.resetDebugVisualizerCamera(
                     cameraDistance=15,
                     cameraYaw=0,

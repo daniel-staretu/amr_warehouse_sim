@@ -15,15 +15,16 @@ Sensor model (VLP-16 inspired)
 
 Output per scan
   points  np.ndarray  (N, 4)  float32   x  y  z  intensity  — sensor frame
-  labels  np.ndarray  (N,)    int32     all zeros (no recognition model yet)
+  labels  np.ndarray  (N,)    int32     per-point semantic class derived from
+                                        the PyBullet body ID returned by each ray
 
 Saved format
   Each scan is written as two NumPy .npy files when COLLECT_LIDAR_DATA is True:
     scans/{frame:06d}.npy   float32  (N, 4)
-    labels/{frame:06d}.npy  int32    (N,)   all zeros
+    labels/{frame:06d}.npy  int32    (N,)   0=background 1=shelf 2=crate 3=forklift
   An 80/20 train/val split is applied: every 5th frame goes to val/.
 
-LiDAR view (LIDAR_VIEW_ENABLED = True)
+Sensor view (SENSOR_VIEW_ENABLED = True)
   Opens an OpenCV window with two panels:
 
   Top — Range image (720 x 192 px)
@@ -50,19 +51,28 @@ from config import (
     LIDAR_VERT_MIN_DEG, LIDAR_VERT_MAX_DEG,
     LIDAR_MAX_RANGE, LIDAR_SENSOR_HEIGHT,
     COLLECT_LIDAR_DATA, LIDAR_DATA_DIR,
-    LIDAR_VIEW_ENABLED,
+    SENSOR_VIEW_ENABLED,
     GUI_MODE,
     MAX_DETECTION_RANGE, RESOLUTION,
+    LABEL_BACKGROUND, LABEL_SHELF, LABEL_CRATE, LABEL_FORKLIFT,
 )
 
 # ---------------------------------------------------------------------------
 # Rendering constants
 # ---------------------------------------------------------------------------
 _RI_SCALE_W = 2    # range-image horizontal upscale factor  → 360*2 = 720 px
-_RI_SCALE_H = 12   # range-image vertical upscale factor   → 16*12 = 192 px
-_BEV_PX     = 720  # bird's-eye-view canvas size (square)
+_RI_SCALE_H = 30   # range-image vertical upscale factor   → 16*30 = 480 px
+_BEV_PX     = 540  # cell size for each quadrant (total window: 1082 × 1082 px)
 _BEV_EXT    = 15.0 # world extent shown in BEV (metres from centre)
-_WIN_NAME   = 'LiDAR View'
+_WIN_NAME   = 'Sensor View'
+
+# BGR colours for the semantic mask overlay (index = label id)
+_MASK_COLORS = np.array([
+    [ 15,  15,  15],   # 0 background
+    [ 40, 180,  40],   # 1 shelf      (green)
+    [ 40,  40, 200],   # 2 crate      (red)
+    [ 20, 150, 240],   # 3 forklift   (orange)
+], dtype=np.uint8)
 
 
 class LidarSensor:
@@ -74,10 +84,15 @@ class LidarSensor:
 
     def __init__(self, robot_id, world):
         self.robot_id      = robot_id
-        # Stored for future use when an object recognition model is wired in.
         self._shelf_ids    = set(world.shelf_ids)
         self._crate_ids    = set(world.crate_ids)
         self._forklift_ids = set(world.forklift_ids)
+
+        self._body_to_label: dict = {
+            **{bid: LABEL_SHELF    for bid in self._shelf_ids},
+            **{bid: LABEL_CRATE    for bid in self._crate_ids},
+            **{bid: LABEL_FORKLIFT for bid in self._forklift_ids},
+        }
 
         # ------------------------------------------------------------------
         # Pre-compute sensor-local ray direction unit vectors.
@@ -105,7 +120,7 @@ class LidarSensor:
         self._vis_id     = self._create_visual()
         self._dbg_pts_id = None
 
-        if LIDAR_VIEW_ENABLED:
+        if SENSOR_VIEW_ENABLED:
             cv2.namedWindow(_WIN_NAME, cv2.WINDOW_NORMAL)
 
         # Data collection
@@ -117,19 +132,31 @@ class LidarSensor:
                         os.path.join(LIDAR_DATA_DIR, split, sub), exist_ok=True
                     )
             self._write_dataset_yaml()
+            self._frame = self._find_next_frame()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def scan(self):
-        """Cast all rays and return the unlabeled point cloud.
+    def register_crate(self, body_id: int) -> None:
+        """Register a crate spawned after sensor construction."""
+        self._crate_ids.add(body_id)
+        self._body_to_label[body_id] = LABEL_CRATE
+
+    def scan(self, camera_frame=None):
+        """Cast all rays and return the labelled point cloud.
+
+        Parameters
+        ----------
+        camera_frame : (rgb, mask) tuple or None
+            Forward-camera capture from ImageCollector.  When provided and
+            SENSOR_VIEW_ENABLED is True, the image is shown in the sensor window.
 
         Returns
         -------
         points : (N, 4) float32  — x y z intensity in sensor frame
                                    intensity = 1 - (range / max_range)
-        labels : (N,)   int32   — all zeros (no recognition model)
+        labels : (N,)   int32   — per-point semantic class
         """
         pos, orn = p.getBasePositionAndOrientation(self.robot_id)
         _, _, yaw = p.getEulerFromQuaternion(orn)
@@ -154,6 +181,7 @@ class LidarSensor:
 
         range_img = np.zeros((LIDAR_VERT_RAYS, LIDAR_HORIZ_RAYS), np.float32)
         pts_list  = []
+        lbl_list  = []
 
         for i, (obj_id, _link, frac, hit_pos, _normal) in enumerate(results):
             if frac >= 1.0 or obj_id < 0 or obj_id == self.robot_id:
@@ -170,22 +198,23 @@ class LidarSensor:
             ly = -sin_y * dx + cos_y * dy
 
             pts_list.append((lx, ly, dz, 1.0 - frac))
+            lbl_list.append(self._body_to_label.get(obj_id, LABEL_BACKGROUND))
 
         if not pts_list:
             points = np.zeros((0, 4), np.float32)
             labels = np.zeros(0, np.int32)
         else:
             points = np.array(pts_list, np.float32)
-            labels = np.zeros(len(pts_list), np.int32)
+            labels = np.array(lbl_list, np.int32)
 
         if COLLECT_LIDAR_DATA:
             self._save_frame(points, labels)
 
-        if GUI_MODE and not LIDAR_VIEW_ENABLED:
+        if GUI_MODE and not SENSOR_VIEW_ENABLED:
             self._draw_debug_points(points, ox, oy, oz, cos_y, sin_y)
 
-        if LIDAR_VIEW_ENABLED:
-            self._render_view(range_img, points)
+        if SENSOR_VIEW_ENABLED:
+            self._render_view(range_img, points, camera_frame)
 
         self._frame += 1
         return points, labels
@@ -233,7 +262,7 @@ class LidarSensor:
 
     def close(self):
         """Destroy the OpenCV window if the view was open."""
-        if LIDAR_VIEW_ENABLED:
+        if SENSOR_VIEW_ENABLED:
             cv2.destroyWindow(_WIN_NAME)
 
     # ------------------------------------------------------------------
@@ -281,27 +310,73 @@ class LidarSensor:
         )
 
     # ------------------------------------------------------------------
-    # LiDAR view rendering
+    # Sensor view rendering  (2 × 2 grid)
+    # ------------------------------------------------------------------
+    #
+    #   ┌─────────────┬─────────────┐
+    #   │  BEV        │  CAMERA RGB │
+    #   ├─────────────┼─────────────┤
+    #   │  RANGE IMG  │  SEG MASK   │
+    #   └─────────────┴─────────────┘
+    #
+    # Each cell is _BEV_PX × _BEV_PX.  Non-square content is letterboxed.
     # ------------------------------------------------------------------
 
-    def _render_view(self, range_img, points):
-        """Compose and display the two-panel LiDAR view."""
-        ri_panel  = self._render_range_image(range_img)
-        bev_panel = self._render_bev(points)
+    def _render_view(self, range_img, points, camera_frame=None):
+        """Compose and display the 2 × 2 sensor grid."""
+        sz = _BEV_PX
 
-        sep = np.zeros((4, _BEV_PX, 3), np.uint8)
+        top_left = self._render_bev(points)
+        bot_left = self._fit_to_cell(self._render_range_image(range_img))
 
-        if ri_panel.shape[1] != _BEV_PX:
-            ri_panel = cv2.resize(ri_panel, (_BEV_PX, ri_panel.shape[0]),
-                                  interpolation=cv2.INTER_NEAREST)
+        if camera_frame is not None:
+            rgb, mask = camera_frame
+            top_right = self._fit_to_cell(cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+            msk_img   = _MASK_COLORS[np.clip(mask, 0, len(_MASK_COLORS) - 1)]
+            bot_right = self._fit_to_cell(msk_img)
+        else:
+            top_right = bot_right = np.zeros((sz, sz, 3), np.uint8)
 
-        view = np.vstack([ri_panel, sep, bev_panel])
-        cv2.imshow(_WIN_NAME, view)
+        cv2.putText(top_right, 'CAMERA  RGB',   (8, 18),
+                    cv2.FONT_HERSHEY_PLAIN, 0.9, (200, 200, 200), 1)
+        cv2.putText(bot_right, 'SEMANTIC MASK', (8, 18),
+                    cv2.FONT_HERSHEY_PLAIN, 0.9, (200, 200, 200), 1)
 
+        for i, (name, color) in enumerate(
+                [('shelf',    (40, 180,  40)),
+                 ('crate',    (40,  40, 200)),
+                 ('forklift', (20, 150, 240))]):
+            y = sz - 10 - i * 14
+            cv2.rectangle(bot_right, (6, y - 9), (16, y + 1), color, -1)
+            cv2.putText(bot_right, name, (20, y),
+                        cv2.FONT_HERSHEY_PLAIN, 0.75, (180, 180, 180), 1)
+
+        sep_v = np.zeros((sz, 2, 3), np.uint8)
+        sep_h = np.zeros((2, sz * 2 + 2, 3), np.uint8)
+        grid  = np.vstack([
+            np.hstack([top_left, sep_v, top_right]),
+            sep_h,
+            np.hstack([bot_left, sep_v, bot_right]),
+        ])
+
+        cv2.imshow(_WIN_NAME, grid)
         key = cv2.waitKey(1) & 0xFF
         window_alive = cv2.getWindowProperty(_WIN_NAME, cv2.WND_PROP_VISIBLE) >= 1
         if not window_alive or key in (ord('q'), 27):
             raise KeyboardInterrupt
+
+    def _fit_to_cell(self, img):
+        """Scale img to fill _BEV_PX × _BEV_PX, centred on a black background."""
+        h, w  = img.shape[:2]
+        scale = min(_BEV_PX / w, _BEV_PX / h)
+        nw, nh = int(w * scale), int(h * scale)
+        interp  = cv2.INTER_LINEAR if scale >= 1.0 else cv2.INTER_AREA
+        resized = cv2.resize(img, (nw, nh), interpolation=interp)
+        cell    = np.zeros((_BEV_PX, _BEV_PX, 3), np.uint8)
+        y0 = (_BEV_PX - nh) // 2
+        x0 = (_BEV_PX - nw) // 2
+        cell[y0:y0 + nh, x0:x0 + nw] = resized
+        return cell
 
     # --- Range image ------------------------------------------------------
 
@@ -404,6 +479,20 @@ class LidarSensor:
     # Data persistence
     # ------------------------------------------------------------------
 
+    def _find_next_frame(self) -> int:
+        max_idx = -1
+        for split in ('train', 'val'):
+            scan_dir = os.path.join(LIDAR_DATA_DIR, split, 'scans')
+            if not os.path.isdir(scan_dir):
+                continue
+            for fname in os.listdir(scan_dir):
+                if fname.endswith('.npy'):
+                    try:
+                        max_idx = max(max_idx, int(fname[:-4]))
+                    except ValueError:
+                        pass
+        return max_idx + 1
+
     def _save_frame(self, points, labels):
         split = 'val' if self._frame % 5 == 0 else 'train'
         stem  = f'{self._frame:06d}'
@@ -418,16 +507,19 @@ class LidarSensor:
             "# AMR Warehouse LiDAR dataset\n"
             f"data_root: {LIDAR_DATA_DIR}\n"
             "\n"
-            "# Labels are all 0 — no recognition model is active yet.\n"
+            "# Per-point semantic labels derived from PyBullet body IDs.\n"
             "classes:\n"
-            "  - {label: 0, name: unlabeled}\n"
+            "  - {label: 0, name: background}\n"
+            "  - {label: 1, name: shelf}\n"
+            "  - {label: 2, name: crate}\n"
+            "  - {label: 3, name: forklift}\n"
             "\n"
             "splits:\n"
             "  train: train/\n"
             "  val:   val/\n"
             "\n"
             "# scans/{frame:06d}.npy   float32  (N, 4)  x y z intensity\n"
-            "# labels/{frame:06d}.npy  int32    (N,)    all zeros\n"
+            "# labels/{frame:06d}.npy  int32    (N,)    semantic class per point\n"
             "#\n"
             "# Coordinate frame: sensor (robot-relative)\n"
             "#   +x forward   +y left   +z up\n"

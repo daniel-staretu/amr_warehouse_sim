@@ -85,11 +85,30 @@ COLLECT_LIDAR_DATA = False
 LIDAR_DATA_DIR     = 'training_data/lidar'
 
 # ---------------------------------------------------------------------------
-# LiDAR rendering view
+# Image data collection
+# ---------------------------------------------------------------------------
+# Set COLLECT_IMAGE_DATA = True to capture labelled RGB images in sync with
+# each LiDAR scan.  A single forward-facing camera is co-located with the
+# LiDAR at LIDAR_SENSOR_HEIGHT.
+#
+# Per scan, one file pair is written:
+#   images/{frame:06d}.png   uint8  H x W x 3   BGR
+#   masks/{frame:06d}.png    uint8  H x W        semantic label index
+#
+# Label indices match the LABEL_* constants above.
+# 80 / 20 train / val split (every 5th frame → val/).
+COLLECT_IMAGE_DATA      = False
+IMAGE_DATA_DIR          = 'training_data/images'
+IMAGE_COLLECTOR_WIDTH   = 640
+IMAGE_COLLECTOR_HEIGHT  = 480
+IMAGE_COLLECTOR_FOV     = 90   # vertical FOV (deg); gives ~106° horizontal at 4:3
+
+# ---------------------------------------------------------------------------
+# Sensor rendering view
 # ---------------------------------------------------------------------------
 # Set True to open a live OpenCV window showing two panels:
 #   Top   — Range image : 360 x 16 raw scan grid (azimuth x elevation),
 #            each pixel coloured by semantic class and dimmed by distance.
 #   Bottom — Bird's Eye View : point cloud projected top-down +-15 m,
 #            coloured by class with distance rings and a legend.
-LIDAR_VIEW_ENABLED = True
+SENSOR_VIEW_ENABLED = True

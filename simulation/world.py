@@ -14,6 +14,8 @@ class WarehouseWorld:
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, GRAVITY)
         self.plane = p.loadURDF("plane.urdf")
+        p.changeVisualShape(self.plane, -1, textureUniqueId=-1,
+                            rgbaColor=[0.45, 0.45, 0.45, 1.0])
         self.obstacles     = []   # (x, y) tuples in world coordinates
         self.shelf_ids     = []   # PyBullet body IDs — all shelf bay instances
         self.crate_ids     = []   # PyBullet body IDs — all target crates
@@ -94,6 +96,7 @@ class WarehouseWorld:
                 basePosition=[x, y0 + i * BAY_WIDTH, 0.0],
             )
             self.shelf_ids.append(body_id)
+            p.changeVisualShape(body_id, -1, rgbaColor=[0.22, 0.22, 0.22, 1.0])
 
         # Mark obstacle cells with 0.25 m clearance buffer around the shelf footprint
         CLEARANCE = 0.25
@@ -196,8 +199,8 @@ class WarehouseWorld:
             - 2.75 m side aisles at the east and west walls
         """
 
-        WALL_COLOR = [0.55, 0.55, 0.55, 1.0]
-        WALL_H     = 2.5
+        WALL_COLOR = [0.78, 0.78, 0.78, 1.0]
+        WALL_H     = 5.0
 
         # --- Outer perimeter walls ---
         hw = MAP_WIDTH  / 2   # 14
@@ -225,6 +228,19 @@ class WarehouseWorld:
             else:
                 self._load_shelf_run(sx, SHELF_NORTH, SHELF_L)
             self._load_shelf_run(sx, SHELF_SOUTH, SHELF_L)
+
+        # Visual-only roof — no collision shape so LiDAR rays are unaffected
+        ROOF_T = 0.3
+        roof_vis = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=[MAP_WIDTH / 2, MAP_HEIGHT / 2, ROOF_T / 2],
+            rgbaColor=[0.70, 0.70, 0.70, 1.0],
+        )
+        p.createMultiBody(
+            baseMass=0,
+            baseVisualShapeIndex=roof_vis,
+            basePosition=[0.0, 0.0, WALL_H + ROOF_T / 2],
+        )
 
         return self.obstacles
 
