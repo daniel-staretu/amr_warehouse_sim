@@ -1,3 +1,4 @@
+import math
 import os
 import pybullet as p
 import pybullet_data
@@ -6,6 +7,9 @@ from config import *
 _SHELF_URDF = os.path.abspath(
     os.path.join(os.path.dirname(__file__), '..', 'assets', 'shelf', 'shelf_bay.urdf')
 )
+_FORKLIFT_URDF = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), '..', 'assets', 'forklift', 'forklift.urdf')
+)
 
 
 class WarehouseWorld:
@@ -13,7 +17,10 @@ class WarehouseWorld:
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, GRAVITY)
         self.plane = p.loadURDF("plane.urdf")
-        self.obstacles = []  # (x, y) tuples in world coordinates
+        self.obstacles     = []   # (x, y) tuples in world coordinates
+        self.shelf_ids     = []   # PyBullet body IDs — all shelf bay instances
+        self.crate_ids     = []   # PyBullet body IDs — all target crates
+        self.forklift_ids  = []   # PyBullet body IDs — all forklift instances
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -57,9 +64,10 @@ class WarehouseWorld:
         # Tile bays symmetrically around y_center
         y0 = y_center - (n_bays * BAY_WIDTH) / 2 + BAY_WIDTH / 2
         for i in range(n_bays):
-            p.loadURDF(_SHELF_URDF,
-                       basePosition=[x, y0 + i * BAY_WIDTH, 0.0],
-                       useFixedBase=1)
+            body_id = p.loadURDF(_SHELF_URDF,
+                                 basePosition=[x, y0 + i * BAY_WIDTH, 0.0],
+                                 useFixedBase=1)
+            self.shelf_ids.append(body_id)
 
         # Mark obstacle cells with 0.25 m clearance buffer around the shelf footprint
         CLEARANCE = 0.25
@@ -74,6 +82,42 @@ class WarehouseWorld:
                 self.obstacles.append((cx, cy))
                 cy += RESOLUTION
             cx += RESOLUTION
+
+    def _load_forklift(self, x, y, yaw=0.0):
+        """Load the forklift mesh at world (x, y, yaw) and mark its footprint
+        as planner obstacles. Returns the PyBullet body ID."""
+        quat = p.getQuaternionFromEuler([0, 0, yaw])
+        body_id = p.loadURDF(_FORKLIFT_URDF,
+                             basePosition=[x, y, 0.0],
+                             baseOrientation=quat,
+                             useFixedBase=1)
+        p.changeVisualShape(body_id, linkIndex=-1,
+                            rgbaColor=[0.890, 0.608, 0.141, 1.0])  # #E39B24
+        self.forklift_ids.append(body_id)
+
+        # Inflate the footprint by ROBOT_RADIUS so the planner treats it as
+        # an impenetrable region (same convention as _load_shelf_run).
+        FORKLIFT_L = 3.46   # total length (m)
+        FORKLIFT_W = 1.24   # total width  (m)
+        hl = FORKLIFT_L / 2 + ROBOT_RADIUS   # half-length + margin
+        hw = FORKLIFT_W / 2 + ROBOT_RADIUS   # half-width  + margin
+
+        # World-frame AABB of the rotated footprint (conservative; keeps the
+        # same simple while-loop style used elsewhere in this file).
+        cos_y = abs(math.cos(yaw))
+        sin_y = abs(math.sin(yaw))
+        dx = hl * cos_y + hw * sin_y
+        dy = hl * sin_y + hw * cos_y
+
+        cx = x - dx
+        while cx <= x + dx + 1e-9:
+            cy = y - dy
+            while cy <= y + dy + 1e-9:
+                self.obstacles.append((cx, cy))
+                cy += RESOLUTION
+            cx += RESOLUTION
+
+        return body_id
 
     # ------------------------------------------------------------------
     # World construction
@@ -120,7 +164,12 @@ class WarehouseWorld:
         SHELF_SOUTH = -7   # centre y of south unit
 
         for sx in SHELF_COLS:
-            self._load_shelf_run(sx, SHELF_NORTH, SHELF_L)
+            if sx == 8:
+                # NE corner: remove the north shelf row and park a forklift.
+                # Forks face east (+X) toward the wall — a natural rest position.
+                self._load_forklift(sx, SHELF_NORTH, yaw=0.0)
+            else:
+                self._load_shelf_run(sx, SHELF_NORTH, SHELF_L)
             self._load_shelf_run(sx, SHELF_SOUTH, SHELF_L)
 
         return self.obstacles
@@ -129,5 +178,8 @@ class WarehouseWorld:
         vis = p.createVisualShape(p.GEOM_BOX, halfExtents=[0.25, 0.25, 0.25],
                                   rgbaColor=[1, 0, 0, 1])
         col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.25, 0.25, 0.25])
-        p.createMultiBody(baseVisualShapeIndex=vis, baseCollisionShapeIndex=col,
-                          basePosition=[x, y, 0.25])
+        body_id = p.createMultiBody(baseVisualShapeIndex=vis,
+                                    baseCollisionShapeIndex=col,
+                                    basePosition=[x, y, 0.25])
+        self.crate_ids.append(body_id)
+        return body_id

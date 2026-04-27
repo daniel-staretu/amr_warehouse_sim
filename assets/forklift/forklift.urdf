@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<robot name="forklift">
+  <!--
+    OBJ units: centimetres, Y-up (Cinema4D export).
+    OBJ extents:
+      X: -342.7 to +362.1  span 704.7 cm  (length: fork-tip to tail)
+      Y:   -2.0 to +507.4  span 509.4 cm  (height)
+      Z: -126.0 to +126.0  span 252.0 cm  (width, symmetric about 0)
+
+    Uniform meshScale 0.004907 maps raw OBJ units to metres:
+      length  704.7 x 0.004907 = 3.46 m
+      height  509.4 x 0.004907 = 2.50 m
+      width   252.0 x 0.004907 = 1.24 m
+
+    rpy="1.5708 0 0" (roll +90 deg around X) converts Y-up OBJ to Z-up PyBullet:
+      OBJ X -> PB X  (length / forward direction)
+      OBJ Y -> PB Z  (up)
+      OBJ Z -> PB -Y (width; model is symmetric in Z so the negation is harmless)
+
+    OBJ X centre: (362.1 + (-342.7)) / 2 x 0.004907 = +0.048 m off the OBJ origin.
+    xyz="-0.048 0 0" in the visual origin cancels this offset so that the link
+    origin sits at the lateral centre of the forklift body at ground level.
+  -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="-0.048 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <mesh filename="Forklift.obj" scale="0.004907 0.004907 0.004907"/>
+      </geometry>
+    </visual>
+    <collision>
+      <!-- Conservative box hull over the full forklift body -->
+      <origin xyz="0 0 1.25" rpy="0 0 0"/>
+      <geometry>
+        <box size="3.46 1.24 2.50"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="5000"/>
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+  </link>
+</robot>

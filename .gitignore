@@ -9,3 +9,18 @@ navigation/heuristic_*.pt
 
 # Generated visualisations
 cost_map.png
+
+# Dissertation folder
+dizertatie/
+
+# Claude project guide
+CLAUDE.md
+
+# Training data (generated at runtime — too large for version control)
+training_data/
+training_data_upload.zip
+
+# Research papers and dissertation assets
+documentation/
+*.pdf
+*.docx

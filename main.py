@@ -1,19 +1,14 @@
 import pybullet as p
 import time
 import math
-import threading
-import cv2
 
 from config import *
 from simulation.world import WarehouseWorld
 from simulation.robot import WarehouseRobot
 from navigation.planner import AStarPlanner, DStarLitePlanner, HybridAStarPlanner, KinoDStarLitePlanner
 from navigation.controller import PurePursuitController
-from navigation.replanner import to_xy, replan_to_goal, find_detour, pick_random_goal
-from perception.vision import VisionSystem
-from perception.localizer import ObstacleLocalizer, has_new_obstacle
-
-DETECTION_INTERVAL = 8     # run perception every N sim steps (~30 fps at 240 Hz)
+from navigation.replanner import to_xy, pick_random_goal
+from perception.lidar import LidarSensor
 
 # ---------------------------------------------------------------------------
 # Obstacle test case
@@ -80,8 +75,7 @@ def main():
     # 2. Spawn Robot (fixed starting position)
     start_pos = [-12, -13]
     robot = WarehouseRobot(start_pos=[start_pos[0], start_pos[1], 0.1])
-    vision    = VisionSystem(robot.id)
-    localizer = ObstacleLocalizer()
+    lidar = LidarSensor(robot.id, world)
 
     # 3. Setup Navigation
     if PLANNER == "astar":
@@ -121,45 +115,10 @@ def main():
     # 5. Main Loop
     print("Starting simulation... (Ctrl+C to quit)")
     step = 0
-    last_replan_obs_pos = []   # world (wx, wy) positions at last successful replan trigger
-
-    # Async replan state — robot keeps moving while the planner runs in a thread
-    _replan = {'active': False, 'result': None, 'obstacles': frozenset()}
-    _replan_lock = threading.Lock()
-
-    def _replan_worker(rs, gp, obs_positions):
-        new_path = replan_to_goal(planner, rs, gp)
-        if not new_path:
-            new_path = find_detour(planner, rs, gp, obs_positions)
-        with _replan_lock:
-            _replan['result'] = new_path or []
-            _replan['active'] = False
 
     try:
         while True:
             robot_state = robot.get_state()
-
-            # Apply a completed async replan — splice from current robot position
-            # so the controller continues in the direction the robot is already moving
-            with _replan_lock:
-                replan_ready = _replan['result'] is not None
-                replan_path  = _replan['result']
-                replan_obs   = _replan['obstacles']
-                if replan_ready:
-                    _replan['result'] = None
-            if replan_ready:
-                if replan_path:
-                    path = replan_path
-                    clear_path(line_ids)
-                    line_ids = draw_path(to_xy(path))
-                    # Start tracking from the closest waypoint so there is no
-                    # backward steer when the path was computed a few frames ago
-                    controller.set_path_near(to_xy(path),
-                                             (robot_state[0], robot_state[1]))
-                    last_replan_obs_pos = replan_obs   # list of (wx, wy)
-                    print("[Perception] Async replan applied.")
-                else:
-                    print("[Perception] Async replan found no path — will retry.")
 
             # Check if current goal has been reached
             dist_to_goal = math.hypot(goal_pos[0] - robot_state[0], goal_pos[1] - robot_state[1])
@@ -171,7 +130,6 @@ def main():
                                                       robot_state[2])
                 if new_goal is not None:
                     goal_pos, path = new_goal, new_path
-                    last_replan_obs_pos = []
                     print(f"New goal: ({goal_pos[0]:.2f}, {goal_pos[1]:.2f})")
                     controller.set_path(to_xy(path))
                     line_ids = draw_path(to_xy(path))
@@ -182,44 +140,9 @@ def main():
             v, omega = controller.compute_control(robot_state)
             robot.apply_control(v, omega)
 
-            # Camera perception + dynamic obstacle replanning
-            if step % DETECTION_INTERVAL == 0:
-                rgb, depth = vision.get_camera_data()
-                detections, annotated = vision.detect_target(rgb)
-
-                # Display annotated feed
-                cv2.imshow("Robot Camera", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
-                cv2.waitKey(1)
-
-                with _replan_lock:
-                    replan_active = _replan['active']
-
-                # Only update the obstacle map when no replan thread is reading it
-                if not replan_active:
-                    planner.remove_dynamic_obstacles()
-                    obstacle_positions = localizer.detections_to_world(
-                        detections, depth, robot_state)
-                    for wx, wy in obstacle_positions:
-                        planner.add_dynamic_obstacle(wx, wy)
-
-                    # Trigger async replan only when genuinely new obstacles appear.
-                    # A 1.0 m proximity tolerance prevents repeated replanning when the
-                    # localiser shifts its position estimate as the robot approaches the
-                    # same physical obstacle.
-                    if (obstacle_positions
-                            and has_new_obstacle(obstacle_positions, last_replan_obs_pos)
-                            and planner.path_is_blocked(path)):
-                        print(f"[Perception] Path blocked — async replan to "
-                              f"({goal_pos[0]:.2f}, {goal_pos[1]:.2f})...")
-                        with _replan_lock:
-                            _replan['active']    = True
-                            _replan['result']    = None
-                            _replan['obstacles'] = list(obstacle_positions)
-                        threading.Thread(
-                            target=_replan_worker,
-                            args=(robot_state, goal_pos, list(obstacle_positions)),
-                            daemon=True,
-                        ).start()
+            # LiDAR scan  (10 Hz — every LIDAR_INTERVAL sim steps)
+            if step % LIDAR_INTERVAL == 0:
+                lidar.scan()
 
             # Follow robot with GUI camera
             if GUI_MODE:
@@ -238,7 +161,6 @@ def main():
     except KeyboardInterrupt:
         print("Simulation stopped.")
     finally:
-        cv2.destroyAllWindows()
         p.disconnect()
 
 

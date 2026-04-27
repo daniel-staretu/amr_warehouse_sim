@@ -44,3 +44,42 @@ MAX_DETECTION_RANGE = 8.0  # ignore obstacle detections beyond this distance (m)
 
 TARGET_COLOR_LOWER = np.array([0, 100, 100]) # Red color mask in HSV
 TARGET_COLOR_UPPER = np.array([10, 255, 255])
+
+# ---------------------------------------------------------------------------
+# LiDAR sensor  (VLP-16 inspired)
+# ---------------------------------------------------------------------------
+# Geometry
+#   Horizontal : 360 rays at 1 deg spacing — full 360 deg sweep
+#   Vertical   : 16 channels from -15 deg (floor side) to +15 deg (ceiling side)
+#   Total rays : 360 x 16 = 5 760 per scan
+#   Max range  : 20 m  — covers the full 28 x 30 m warehouse at oblique angles
+#   Rate       : every LIDAR_INTERVAL sim steps = 10 Hz at 240 Hz
+#
+# Mounting
+#   Sensor centre is LIDAR_SENSOR_HEIGHT above ground.
+#   Robot body top is at z = ROBOT_BASE_Z + 0.05 = 0.15 m.
+#   Cylinder visual: radius 0.07 m, height 0.10 m, centre at 0.20 m.
+LIDAR_HORIZ_RAYS    = 360     # rays per revolution (1 deg resolution)
+LIDAR_VERT_RAYS     = 16      # vertical channels
+LIDAR_VERT_MIN_DEG  = -15.0   # bottom channel elevation (deg)
+LIDAR_VERT_MAX_DEG  =  15.0   # top channel elevation (deg)
+LIDAR_MAX_RANGE     = 20.0    # metres
+LIDAR_SENSOR_HEIGHT =  0.20   # sensor centre z above ground (m)
+LIDAR_INTERVAL      = 24      # scan every N sim steps  (10 Hz at 240 Hz)
+
+# Semantic class indices used in saved label arrays and at inference time
+LABEL_BACKGROUND = 0   # walls, floor, ceiling, unknown
+LABEL_SHELF      = 1
+LABEL_CRATE      = 2
+LABEL_FORKLIFT   = 3
+
+# ---------------------------------------------------------------------------
+# Training data collection
+# ---------------------------------------------------------------------------
+# Set COLLECT_LIDAR_DATA = True to write point clouds to disk.
+# Each scan is saved as two .npy files:
+#   scans/{frame:06d}.npy   float32  (N, 4)  columns: x  y  z  intensity
+#   labels/{frame:06d}.npy  int32    (N,)    per-point semantic class
+# 80 / 20 train / val split (every 5th frame goes to val).
+COLLECT_LIDAR_DATA = False
+LIDAR_DATA_DIR     = 'training_data/lidar'
