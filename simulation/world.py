@@ -4,12 +4,9 @@ import pybullet as p
 import pybullet_data
 from config import *
 
-_SHELF_URDF = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', 'assets', 'shelf', 'shelf_bay.urdf')
-)
-_FORKLIFT_URDF = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', 'assets', 'forklift', 'forklift.urdf')
-)
+_ASSETS       = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'assets'))
+_SHELF_OBJ    = os.path.join(_ASSETS, 'shelf',    'eb_metal_shelf_01.obj')
+_FORKLIFT_OBJ = os.path.join(_ASSETS, 'forklift', 'Forklift.obj')
 
 
 class WarehouseWorld:
@@ -55,18 +52,47 @@ class WarehouseWorld:
             cx += RESOLUTION
 
     def _load_shelf_run(self, x, y_center, length=10.0):
-        """Load 3-D shelf model instances tiled along Y to fill a shelf unit,
-        and mark the covered grid cells as obstacles for the planner."""
+        """Spawn shelf bays with exact-mesh concave collision.
+
+        GEOM_FORCE_CONCAVE_TRIMESH builds a BVH from the OBJ triangles, so
+        LiDAR rays penetrate the open bay face and return hits on uprights,
+        individual shelf boards, and the back panel rather than on a box hull.
+        Only valid for static bodies (baseMass=0).
+        """
         BAY_WIDTH = 1.04        # metres — natural width of one OBJ bay
         SHELF_W   = 1.5         # obstacle footprint width (E-W), matches layout
         n_bays = round(length / BAY_WIDTH)
 
-        # Tile bays symmetrically around y_center
+        # Mesh transform matching the URDF visual origin:
+        #   rpy = π/2  0  π/2   → OBJ Y-up axes to PyBullet Z-up axes
+        #   xyz = -0.75  0  0   → centres the 1.5 m depth on the link origin
+        shelf_quat  = p.getQuaternionFromEuler([math.pi / 2, 0.0, math.pi / 2])
+        shelf_scale = [0.01, 0.015575, 0.038462]
+        shelf_frame = [-0.75, 0.0, 0.0]
+
         y0 = y_center - (n_bays * BAY_WIDTH) / 2 + BAY_WIDTH / 2
         for i in range(n_bays):
-            body_id = p.loadURDF(_SHELF_URDF,
-                                 basePosition=[x, y0 + i * BAY_WIDTH, 0.0],
-                                 useFixedBase=1)
+            col = p.createCollisionShape(
+                p.GEOM_MESH,
+                fileName=_SHELF_OBJ,
+                meshScale=shelf_scale,
+                flags=p.GEOM_FORCE_CONCAVE_TRIMESH,
+                collisionFramePosition=shelf_frame,
+                collisionFrameOrientation=shelf_quat,
+            )
+            vis = p.createVisualShape(
+                p.GEOM_MESH,
+                fileName=_SHELF_OBJ,
+                meshScale=shelf_scale,
+                visualFramePosition=shelf_frame,
+                visualFrameOrientation=shelf_quat,
+            )
+            body_id = p.createMultiBody(
+                baseMass=0,
+                baseCollisionShapeIndex=col,
+                baseVisualShapeIndex=vis,
+                basePosition=[x, y0 + i * BAY_WIDTH, 0.0],
+            )
             self.shelf_ids.append(body_id)
 
         # Mark obstacle cells with 0.25 m clearance buffer around the shelf footprint
@@ -84,13 +110,42 @@ class WarehouseWorld:
             cx += RESOLUTION
 
     def _load_forklift(self, x, y, yaw=0.0):
-        """Load the forklift mesh at world (x, y, yaw) and mark its footprint
-        as planner obstacles. Returns the PyBullet body ID."""
-        quat = p.getQuaternionFromEuler([0, 0, yaw])
-        body_id = p.loadURDF(_FORKLIFT_URDF,
-                             basePosition=[x, y, 0.0],
-                             baseOrientation=quat,
-                             useFixedBase=1)
+        """Load the forklift with exact-mesh concave collision.
+
+        GEOM_FORCE_CONCAVE_TRIMESH lets LiDAR rays resolve the actual forklift
+        silhouette — forks, mast, cab — instead of a bounding-box hull.
+        Returns the PyBullet body ID.
+        """
+        # Mesh transform matching the URDF visual origin:
+        #   rpy = π/2  0  0   → OBJ Y-up axes to PyBullet Z-up axes
+        #   xyz = -0.048  0  0 → centres the vehicle length on the link origin
+        fl_quat   = p.getQuaternionFromEuler([math.pi / 2, 0.0, 0.0])
+        fl_scale  = [0.004907, 0.004907, 0.004907]
+        fl_frame  = [-0.048, 0.0, 0.0]
+        body_quat = p.getQuaternionFromEuler([0.0, 0.0, yaw])
+
+        col = p.createCollisionShape(
+            p.GEOM_MESH,
+            fileName=_FORKLIFT_OBJ,
+            meshScale=fl_scale,
+            flags=p.GEOM_FORCE_CONCAVE_TRIMESH,
+            collisionFramePosition=fl_frame,
+            collisionFrameOrientation=fl_quat,
+        )
+        vis = p.createVisualShape(
+            p.GEOM_MESH,
+            fileName=_FORKLIFT_OBJ,
+            meshScale=fl_scale,
+            visualFramePosition=fl_frame,
+            visualFrameOrientation=fl_quat,
+        )
+        body_id = p.createMultiBody(
+            baseMass=0,
+            baseCollisionShapeIndex=col,
+            baseVisualShapeIndex=vis,
+            basePosition=[x, y, 0.0],
+            baseOrientation=body_quat,
+        )
         p.changeVisualShape(body_id, linkIndex=-1,
                             rgbaColor=[0.890, 0.608, 0.141, 1.0])  # #E39B24
         self.forklift_ids.append(body_id)
@@ -102,8 +157,7 @@ class WarehouseWorld:
         hl = FORKLIFT_L / 2 + ROBOT_RADIUS   # half-length + margin
         hw = FORKLIFT_W / 2 + ROBOT_RADIUS   # half-width  + margin
 
-        # World-frame AABB of the rotated footprint (conservative; keeps the
-        # same simple while-loop style used elsewhere in this file).
+        # World-frame AABB of the rotated footprint (conservative).
         cos_y = abs(math.cos(yaw))
         sin_y = abs(math.sin(yaw))
         dx = hl * cos_y + hw * sin_y

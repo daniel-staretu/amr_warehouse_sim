@@ -83,3 +83,13 @@ LABEL_FORKLIFT   = 3
 # 80 / 20 train / val split (every 5th frame goes to val).
 COLLECT_LIDAR_DATA = False
 LIDAR_DATA_DIR     = 'training_data/lidar'
+
+# ---------------------------------------------------------------------------
+# LiDAR rendering view
+# ---------------------------------------------------------------------------
+# Set True to open a live OpenCV window showing two panels:
+#   Top   — Range image : 360 x 16 raw scan grid (azimuth x elevation),
+#            each pixel coloured by semantic class and dimmed by distance.
+#   Bottom — Bird's Eye View : point cloud projected top-down +-15 m,
+#            coloured by class with distance rings and a legend.
+LIDAR_VIEW_ENABLED = True

@@ -23,11 +23,44 @@
         <mesh filename="eb_metal_shelf_01.obj" scale="0.01 0.015575 0.038462"/>
       </geometry>
     </visual>
+    <!-- Four corner uprights — thin vertical posts let rays pass between them -->
     <collision>
-      <origin xyz="0 0 1.25" rpy="0 0 0"/>
-      <geometry>
-        <box size="1.5 1.04 2.5"/>
-      </geometry>
+      <origin xyz="-0.72 -0.49 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.06 0.06 2.50"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.72  0.49 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.06 0.06 2.50"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz=" 0.72 -0.49 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.06 0.06 2.50"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz=" 0.72  0.49 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.06 0.06 2.50"/></geometry>
+    </collision>
+    <!-- Solid back panel — closes the rear face of the bay -->
+    <collision>
+      <origin xyz="0.72 0 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.04 1.04 2.50"/></geometry>
+    </collision>
+    <!-- Horizontal shelf boards (0.08 m thick) at four levels -->
+    <collision>
+      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+      <geometry><box size="1.50 1.04 0.08"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0 0.76" rpy="0 0 0"/>
+      <geometry><box size="1.50 1.04 0.08"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0 1.46" rpy="0 0 0"/>
+      <geometry><box size="1.50 1.04 0.08"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0 0 2.16" rpy="0 0 0"/>
+      <geometry><box size="1.50 1.04 0.08"/></geometry>
     </collision>
     <inertial>
       <mass value="1000"/>

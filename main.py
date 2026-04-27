@@ -1,14 +1,16 @@
 import pybullet as p
 import time
 import math
+import threading
 
 from config import *
 from simulation.world import WarehouseWorld
 from simulation.robot import WarehouseRobot
 from navigation.planner import AStarPlanner, DStarLitePlanner, HybridAStarPlanner, KinoDStarLitePlanner
 from navigation.controller import PurePursuitController
-from navigation.replanner import to_xy, pick_random_goal
+from navigation.replanner import to_xy, pick_random_goal, replan_to_goal, find_detour
 from perception.lidar import LidarSensor
+from perception.localizer import has_new_obstacle
 
 # ---------------------------------------------------------------------------
 # Obstacle test case
@@ -55,7 +57,9 @@ def clear_path(line_ids):
 
 def main():
     # 1. Setup Simulation
-    if GUI_MODE:
+    # LIDAR_VIEW_ENABLED replaces the 3-D PyBullet window with the OpenCV
+    # LiDAR panels, so connect headless in that case.
+    if GUI_MODE and not LIDAR_VIEW_ENABLED:
         p.connect(p.GUI)
     else:
         p.connect(p.DIRECT)
@@ -115,10 +119,42 @@ def main():
     # 5. Main Loop
     print("Starting simulation... (Ctrl+C to quit)")
     step = 0
+    last_replan_obs_pos = []
+
+    # Async replan state — robot keeps moving while the planner runs in a thread
+    _replan      = {'active': False, 'result': None, 'obstacles': []}
+    _replan_lock = threading.Lock()
+
+    def _replan_worker(rs, gp, obs_positions):
+        new_path = replan_to_goal(planner, rs, gp)
+        if not new_path:
+            new_path = find_detour(planner, rs, gp, obs_positions)
+        with _replan_lock:
+            _replan['result'] = new_path or []
+            _replan['active'] = False
 
     try:
         while True:
             robot_state = robot.get_state()
+
+            # Apply a completed async replan
+            with _replan_lock:
+                replan_ready = _replan['result'] is not None
+                replan_path  = _replan['result']
+                replan_obs   = _replan['obstacles']
+                if replan_ready:
+                    _replan['result'] = None
+            if replan_ready:
+                if replan_path:
+                    path = replan_path
+                    clear_path(line_ids)
+                    line_ids = draw_path(to_xy(path))
+                    controller.set_path_near(to_xy(path),
+                                             (robot_state[0], robot_state[1]))
+                    last_replan_obs_pos = replan_obs
+                    print("[LiDAR] Async replan applied.")
+                else:
+                    print("[LiDAR] Async replan found no path — will retry.")
 
             # Check if current goal has been reached
             dist_to_goal = math.hypot(goal_pos[0] - robot_state[0], goal_pos[1] - robot_state[1])
@@ -130,6 +166,7 @@ def main():
                                                       robot_state[2])
                 if new_goal is not None:
                     goal_pos, path = new_goal, new_path
+                    last_replan_obs_pos = []
                     print(f"New goal: ({goal_pos[0]:.2f}, {goal_pos[1]:.2f})")
                     controller.set_path(to_xy(path))
                     line_ids = draw_path(to_xy(path))
@@ -140,12 +177,36 @@ def main():
             v, omega = controller.compute_control(robot_state)
             robot.apply_control(v, omega)
 
-            # LiDAR scan  (10 Hz — every LIDAR_INTERVAL sim steps)
+            # LiDAR scan + dynamic obstacle registration + replan trigger (10 Hz)
             if step % LIDAR_INTERVAL == 0:
-                lidar.scan()
+                points, _ = lidar.scan()
+
+                with _replan_lock:
+                    replan_active = _replan['active']
+
+                if not replan_active:
+                    planner.remove_dynamic_obstacles()
+                    obs_positions = lidar.obstacles_in_world(points, robot_state)
+                    for wx, wy in obs_positions:
+                        planner.add_dynamic_obstacle(wx, wy)
+
+                    if (obs_positions
+                            and has_new_obstacle(obs_positions, last_replan_obs_pos)
+                            and planner.path_is_blocked(path)):
+                        print(f"[LiDAR] Path blocked — async replan to "
+                              f"({goal_pos[0]:.2f}, {goal_pos[1]:.2f})...")
+                        with _replan_lock:
+                            _replan['active']    = True
+                            _replan['result']    = None
+                            _replan['obstacles'] = obs_positions
+                        threading.Thread(
+                            target=_replan_worker,
+                            args=(robot_state, goal_pos, obs_positions),
+                            daemon=True,
+                        ).start()
 
             # Follow robot with GUI camera
-            if GUI_MODE:
+            if GUI_MODE and not LIDAR_VIEW_ENABLED:
                 p.resetDebugVisualizerCamera(
                     cameraDistance=15,
                     cameraYaw=0,
@@ -161,6 +222,7 @@ def main():
     except KeyboardInterrupt:
         print("Simulation stopped.")
     finally:
+        lidar.close()
         p.disconnect()
 
 

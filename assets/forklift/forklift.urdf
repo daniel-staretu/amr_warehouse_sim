@@ -28,12 +28,30 @@
         <mesh filename="Forklift.obj" scale="0.004907 0.004907 0.004907"/>
       </geometry>
     </visual>
+    <!-- Rear body (cab + counterweight) — full height, rear half of vehicle -->
     <collision>
-      <!-- Conservative box hull over the full forklift body -->
-      <origin xyz="0 0 1.25" rpy="0 0 0"/>
-      <geometry>
-        <box size="3.46 1.24 2.50"/>
-      </geometry>
+      <origin xyz="0.87 0 1.25" rpy="0 0 0"/>
+      <geometry><box size="1.72 1.24 2.50"/></geometry>
+    </collision>
+    <!-- Low structural frame connecting mast to rear body -->
+    <collision>
+      <origin xyz="0.0 0 0.20" rpy="0 0 0"/>
+      <geometry><box size="0.78 1.24 0.25"/></geometry>
+    </collision>
+    <!-- Mast (front vertical lift structure) -->
+    <collision>
+      <origin xyz="-0.50 0 1.25" rpy="0 0 0"/>
+      <geometry><box size="0.22 1.24 2.50"/></geometry>
+    </collision>
+    <!-- Left fork (flat prong near ground) -->
+    <collision>
+      <origin xyz="-1.17 -0.25 0.05" rpy="0 0 0"/>
+      <geometry><box size="1.12 0.12 0.06"/></geometry>
+    </collision>
+    <!-- Right fork -->
+    <collision>
+      <origin xyz="-1.17  0.25 0.05" rpy="0 0 0"/>
+      <geometry><box size="1.12 0.12 0.06"/></geometry>
     </collision>
     <inertial>
       <mass value="5000"/>
