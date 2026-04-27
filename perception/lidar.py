@@ -15,18 +15,12 @@ Sensor model (VLP-16 inspired)
 
 Output per scan
   points  np.ndarray  (N, 4)  float32   x  y  z  intensity  — sensor frame
-  labels  np.ndarray  (N,)    int32     per-point semantic class:
-            LABEL_BACKGROUND = 0  (walls, floor, ceiling)
-            LABEL_SHELF      = 1
-            LABEL_CRATE      = 2
-            LABEL_FORKLIFT   = 3
+  labels  np.ndarray  (N,)    int32     all zeros (no recognition model yet)
 
 Saved format
   Each scan is written as two NumPy .npy files when COLLECT_LIDAR_DATA is True:
     scans/{frame:06d}.npy   float32  (N, 4)
-    labels/{frame:06d}.npy  int32    (N,)
-  .npy is directly loadable by PointNet++, PointPillars, and Improved
-  PointPillars via np.load() with no conversion step.
+    labels/{frame:06d}.npy  int32    (N,)   all zeros
   An 80/20 train/val split is applied: every 5th frame goes to val/.
 
 LiDAR view (LIDAR_VIEW_ENABLED = True)
@@ -35,14 +29,13 @@ LiDAR view (LIDAR_VIEW_ENABLED = True)
   Top — Range image (720 x 192 px)
     360 horizontal columns x 16 vertical rows.
     Each pixel = one ray.  Highest elevation at top (after vertical flip).
-    Colour  : semantic class BGR tinted by (1 - range/max_range),
-              black = no return.
+    Colour  : blue (close) → yellow (far), black = no return.
 
   Bottom — Bird's Eye View (720 x 720 px, +-15 m)
     Point cloud projected onto the ground plane.
-    Robot at centre, facing up.  Coloured by class.
+    Robot at centre, facing up.  Each hit = one pixel.
+    Colour  : blue (close) → yellow (far).
     Distance rings at 5 m / 10 m / 15 m.
-    Class legend in the top-left corner.
 """
 
 import math
@@ -58,7 +51,6 @@ from config import (
     LIDAR_MAX_RANGE, LIDAR_SENSOR_HEIGHT,
     COLLECT_LIDAR_DATA, LIDAR_DATA_DIR,
     LIDAR_VIEW_ENABLED,
-    LABEL_BACKGROUND, LABEL_SHELF, LABEL_CRATE, LABEL_FORKLIFT,
     GUI_MODE,
     MAX_DETECTION_RANGE, RESOLUTION,
 )
@@ -80,33 +72,9 @@ class LidarSensor:
     _VIS_RADIUS = 0.07
     _VIS_HEIGHT = 0.10
 
-    # Per-label colours used in PyBullet debug display (RGB, 0-1)
-    _LABEL_RGB = {
-        LABEL_BACKGROUND: [0.55, 0.55, 0.55],
-        LABEL_SHELF:      [0.20, 0.45, 1.00],
-        LABEL_CRATE:      [1.00, 0.20, 0.20],
-        LABEL_FORKLIFT:   [0.89, 0.61, 0.14],
-    }
-
-    # Same colours in OpenCV BGR (0-255 uint8 tuples).
-    # Derived from _LABEL_RGB: BGR = reversed RGB channels * 255.
-    _LABEL_BGR = {
-        LABEL_BACKGROUND: (140, 140, 140),
-        LABEL_SHELF:      (255, 115,  51),
-        LABEL_CRATE:      ( 51,  51, 255),
-        LABEL_FORKLIFT:   ( 36, 156, 227),
-    }
-
-    # Human-readable names for the legend
-    _LABEL_NAME = {
-        LABEL_BACKGROUND: 'Background',
-        LABEL_SHELF:      'Shelf',
-        LABEL_CRATE:      'Crate',
-        LABEL_FORKLIFT:   'Forklift',
-    }
-
     def __init__(self, robot_id, world):
         self.robot_id      = robot_id
+        # Stored for future use when an object recognition model is wired in.
         self._shelf_ids    = set(world.shelf_ids)
         self._crate_ids    = set(world.crate_ids)
         self._forklift_ids = set(world.forklift_ids)
@@ -114,8 +82,7 @@ class LidarSensor:
         # ------------------------------------------------------------------
         # Pre-compute sensor-local ray direction unit vectors.
         # Layout: vert channel changes slowly (outer), horiz ray changes fast
-        # (inner).  Ray index i = vert_idx * H + horiz_idx — used to recover
-        # (v, h) grid position when building the range image.
+        # (inner).  Ray index i = vert_idx * H + horiz_idx.
         # Shape: (LIDAR_VERT_RAYS * LIDAR_HORIZ_RAYS, 3)
         # ------------------------------------------------------------------
         horiz = np.linspace(0.0, 2.0 * math.pi, LIDAR_HORIZ_RAYS, endpoint=False)
@@ -138,9 +105,6 @@ class LidarSensor:
         self._vis_id     = self._create_visual()
         self._dbg_pts_id = None
 
-        # Create the OpenCV window up-front so the OS registers its close button
-        # before the first frame arrives.  Without this, imshow auto-creates the
-        # window each call and the WND_PROP_VISIBLE check is unreliable.
         if LIDAR_VIEW_ENABLED:
             cv2.namedWindow(_WIN_NAME, cv2.WINDOW_NORMAL)
 
@@ -159,18 +123,13 @@ class LidarSensor:
     # ------------------------------------------------------------------
 
     def scan(self):
-        """Cast all rays and return the classified point cloud.
-
-        Also updates:
-          - the cosmetic LiDAR cylinder visual
-          - the PyBullet debug point cloud (if GUI_MODE)
-          - the OpenCV LiDAR View window (if LIDAR_VIEW_ENABLED)
-          - saved .npy files on disk (if COLLECT_LIDAR_DATA)
+        """Cast all rays and return the unlabeled point cloud.
 
         Returns
         -------
         points : (N, 4) float32  — x y z intensity in sensor frame
-        labels : (N,)   int32   — semantic class per point
+                                   intensity = 1 - (range / max_range)
+        labels : (N,)   int32   — all zeros (no recognition model)
         """
         pos, orn = p.getBasePositionAndOrientation(self.robot_id)
         _, _, yaw = p.getEulerFromQuaternion(orn)
@@ -193,59 +152,46 @@ class LidarSensor:
 
         results = p.rayTestBatch(from_pts.tolist(), to_pts.tolist(), numThreads=4)
 
-        # Allocate range / label grids for the rendering view
         range_img = np.zeros((LIDAR_VERT_RAYS, LIDAR_HORIZ_RAYS), np.float32)
-        label_img = np.full((LIDAR_VERT_RAYS, LIDAR_HORIZ_RAYS), -1, np.int8)
-
-        pts_list, lbl_list = [], []
+        pts_list  = []
 
         for i, (obj_id, _link, frac, hit_pos, _normal) in enumerate(results):
             if frac >= 1.0 or obj_id < 0 or obj_id == self.robot_id:
                 continue
 
-            lbl, intensity = self._classify(obj_id)
-
-            # Populate range/label image at grid position (v, h)
             v = i // LIDAR_HORIZ_RAYS
             h = i % LIDAR_HORIZ_RAYS
             range_img[v, h] = frac * LIDAR_MAX_RANGE
-            label_img[v, h] = lbl
 
-            # World → sensor frame
             dx = hit_pos[0] - ox
             dy = hit_pos[1] - oy
             dz = hit_pos[2] - oz
             lx =  cos_y * dx + sin_y * dy
             ly = -sin_y * dx + cos_y * dy
 
-            pts_list.append((lx, ly, dz, intensity))
-            lbl_list.append(lbl)
+            pts_list.append((lx, ly, dz, 1.0 - frac))
 
         if not pts_list:
             points = np.zeros((0, 4), np.float32)
             labels = np.zeros(0, np.int32)
         else:
             points = np.array(pts_list, np.float32)
-            labels = np.array(lbl_list, np.int32)
+            labels = np.zeros(len(pts_list), np.int32)
 
         if COLLECT_LIDAR_DATA:
             self._save_frame(points, labels)
 
         if GUI_MODE and not LIDAR_VIEW_ENABLED:
-            self._draw_debug_points(points, labels, ox, oy, oz, cos_y, sin_y)
+            self._draw_debug_points(points, ox, oy, oz, cos_y, sin_y)
 
         if LIDAR_VIEW_ENABLED:
-            self._render_view(range_img, label_img, points, labels)
+            self._render_view(range_img, points)
 
         self._frame += 1
         return points, labels
 
     def obstacles_in_world(self, points, robot_state):
         """Convert above-floor, within-range LiDAR hits to world obstacle positions.
-
-        Purely geometric — no semantic classification needed.  Any physical
-        return that is above the floor and within MAX_DETECTION_RANGE is treated
-        as a potential obstacle, regardless of what object caused the return.
 
         Parameters
         ----------
@@ -259,14 +205,14 @@ class LidarSensor:
         if len(points) == 0:
             return []
 
-        lx = points[:, 0]   # forward in sensor frame
-        ly = points[:, 1]   # left
-        lz = points[:, 2]   # up
+        lx = points[:, 0]
+        ly = points[:, 1]
+        lz = points[:, 2]
 
         horiz_range = np.hypot(lx, ly)
         mask = (
-            (lz > 0.05)                          # above ground (exclude floor returns)
-            & (lz < 2.45)                         # below ceiling
+            (lz > 0.05)
+            & (lz < 2.45)
             & (horiz_range < MAX_DETECTION_RANGE)
         )
         if not mask.any():
@@ -278,11 +224,9 @@ class LidarSensor:
         cos_y = math.cos(yaw)
         sin_y = math.sin(yaw)
 
-        # Sensor frame → world frame
         wx = rx + cos_y * lx_m - sin_y * ly_m
         wy = ry + sin_y * lx_m + cos_y * ly_m
 
-        # Snap to planner grid resolution and deduplicate
         gx = (np.round(wx / RESOLUTION) * RESOLUTION).tolist()
         gy = (np.round(wy / RESOLUTION) * RESOLUTION).tolist()
         return list(set(zip(gx, gy)))
@@ -291,20 +235,6 @@ class LidarSensor:
         """Destroy the OpenCV window if the view was open."""
         if LIDAR_VIEW_ENABLED:
             cv2.destroyWindow(_WIN_NAME)
-
-    # ------------------------------------------------------------------
-    # Classification helper
-    # ------------------------------------------------------------------
-
-    def _classify(self, obj_id):
-        """Return (label, intensity) for a hit body ID."""
-        if obj_id in self._shelf_ids:
-            return LABEL_SHELF,      0.50
-        if obj_id in self._crate_ids:
-            return LABEL_CRATE,      0.80
-        if obj_id in self._forklift_ids:
-            return LABEL_FORKLIFT,   0.60
-        return LABEL_BACKGROUND, 0.30
 
     # ------------------------------------------------------------------
     # PyBullet 3-D debug display
@@ -326,7 +256,7 @@ class LidarSensor:
     def _update_visual(self, x, y, z, quat):
         p.resetBasePositionAndOrientation(self._vis_id, [x, y, z], quat)
 
-    def _draw_debug_points(self, points, labels, ox, oy, oz, cos_y, sin_y):
+    def _draw_debug_points(self, points, ox, oy, oz, cos_y, sin_y):
         if self._dbg_pts_id is not None:
             p.removeUserDebugItem(self._dbg_pts_id)
             self._dbg_pts_id = None
@@ -337,11 +267,12 @@ class LidarSensor:
         wy = sin_y * lx + cos_y * ly + oy
         wz = lz + oz
         world_pos = np.stack([wx, wy, wz], axis=1)
-        default_rgb = self._LABEL_RGB[LABEL_BACKGROUND]
-        colors = np.array(
-            [self._LABEL_RGB.get(int(lb), default_rgb) for lb in labels],
-            dtype=np.float64,
-        )
+
+        dist = np.hypot(lx, ly)
+        t = np.clip(dist / LIDAR_MAX_RANGE, 0.0, 1.0).astype(np.float64)
+        # PyBullet debug points use RGB: blue (close) → yellow (far)
+        colors = np.stack([t, t, 1.0 - t], axis=1)
+
         self._dbg_pts_id = p.addUserDebugPoints(
             world_pos.tolist(), colors.tolist(), pointSize=2
         )
@@ -350,15 +281,13 @@ class LidarSensor:
     # LiDAR view rendering
     # ------------------------------------------------------------------
 
-    def _render_view(self, range_img, label_img, points, labels):
+    def _render_view(self, range_img, points):
         """Compose and display the two-panel LiDAR view."""
-        ri_panel  = self._render_range_image(range_img, label_img)
-        bev_panel = self._render_bev(points, labels)
+        ri_panel  = self._render_range_image(range_img)
+        bev_panel = self._render_bev(points)
 
-        # Thin black separator between panels
         sep = np.zeros((4, _BEV_PX, 3), np.uint8)
 
-        # Resize range image panel to match BEV width (it should already be 720)
         if ri_panel.shape[1] != _BEV_PX:
             ri_panel = cv2.resize(ri_panel, (_BEV_PX, ri_panel.shape[0]),
                                   interpolation=cv2.INTER_NEAREST)
@@ -367,50 +296,40 @@ class LidarSensor:
         cv2.imshow(_WIN_NAME, view)
 
         key = cv2.waitKey(1) & 0xFF
-        # Stop the simulation if the window is closed (X button), Q, or Escape.
-        # getWindowProperty returns < 1 once the OS has destroyed the window.
         window_alive = cv2.getWindowProperty(_WIN_NAME, cv2.WND_PROP_VISIBLE) >= 1
         if not window_alive or key in (ord('q'), 27):
             raise KeyboardInterrupt
 
     # --- Range image ------------------------------------------------------
 
-    def _render_range_image(self, range_img, label_img):
+    def _render_range_image(self, range_img):
         """
         Render the raw 16 x 360 scan grid as a scaled-up image.
 
         Rows    = vertical channels; top = highest elevation (after flipud).
         Columns = horizontal azimuth, 0 deg (robot forward) at left.
-        Colour  = semantic label BGR, dimmed by normalised range.
-        Black   = no return.
+        Colour  = blue (close) → yellow (far).  Black = no return.
 
         Output: (16*_RI_SCALE_H) x (360*_RI_SCALE_W) x 3  uint8
         """
-        H, W = range_img.shape   # 16, 360
+        H, W = range_img.shape
         canvas = np.zeros((H, W, 3), np.uint8)
 
-        for lbl, bgr in self._LABEL_BGR.items():
-            mask = label_img == lbl
-            if not mask.any():
-                continue
-            # Brightness falls off linearly with range; minimum 0.15 so far
-            # objects are still visible (not confused with misses).
-            brightness = np.clip(
-                1.0 - range_img[mask] / LIDAR_MAX_RANGE, 0.15, 1.0
-            )
-            canvas[mask] = (np.array(bgr, np.float32) * brightness[:, None]).astype(np.uint8)
+        hit = range_img > 0
+        if hit.any():
+            t = np.clip(range_img / LIDAR_MAX_RANGE, 0.0, 1.0)
+            canvas[..., 0] = np.where(hit, (1.0 - t) * 255, 0).astype(np.uint8)  # B
+            canvas[..., 1] = np.where(hit, t * 255,         0).astype(np.uint8)  # G
+            canvas[..., 2] = np.where(hit, t * 255,         0).astype(np.uint8)  # R
 
-        # Highest elevation channel at top
         canvas = np.flipud(canvas)
 
-        # Scale up with nearest-neighbour — raw sensor data, no interpolation
         canvas = cv2.resize(
             canvas,
             (W * _RI_SCALE_W, H * _RI_SCALE_H),
             interpolation=cv2.INTER_NEAREST,
         )
 
-        # Axis labels
         cv2.putText(canvas, 'RANGE IMAGE  (azimuth x elevation)',
                     (8, 14), cv2.FONT_HERSHEY_PLAIN, 0.9, (200, 200, 200), 1)
         cv2.putText(canvas, f'+{LIDAR_VERT_MAX_DEG:.0f}deg',
@@ -423,9 +342,10 @@ class LidarSensor:
 
     # --- Bird's Eye View -------------------------------------------------
 
-    def _render_bev(self, points, labels):
+    def _render_bev(self, points):
         """
         Project the point cloud top-down onto a square canvas.
+        Each hit is rendered as a single pixel, coloured by distance.
 
         Sensor frame convention:
           +x forward  →  up   in image
@@ -435,68 +355,41 @@ class LidarSensor:
         """
         sz    = _BEV_PX
         ext   = _BEV_EXT
-        scale = sz / (2.0 * ext)   # pixels per metre
+        scale = sz / (2.0 * ext)
         cx = cy = sz // 2
 
-        canvas = np.full((sz, sz, 3), 15, np.uint8)  # near-black background
+        canvas = np.full((sz, sz, 3), 15, np.uint8)
 
-        # Distance rings
         for r_m in (5, 10, 15):
             r_px = int(r_m * scale)
             cv2.circle(canvas, (cx, cy), r_px, (45, 45, 45), 1, cv2.LINE_AA)
-            # Label at the right side of each ring
             lx_ring = cx + r_px + 4
             if lx_ring < sz - 30:
                 cv2.putText(canvas, f'{r_m}m', (lx_ring, cy - 4),
                             cv2.FONT_HERSHEY_PLAIN, 0.75, (65, 65, 65), 1)
 
-        # Cross-hair
         cv2.line(canvas, (cx, 0),  (cx, sz),  (30, 30, 30), 1)
         cv2.line(canvas, (0, cy),  (sz, cy),  (30, 30, 30), 1)
 
-        # Points — numpy batch indexing (much faster than per-point cv2.circle)
         if len(points) > 0:
-            lx_arr = points[:, 0]   # forward
-            ly_arr = points[:, 1]   # left
+            lx_arr = points[:, 0]
+            ly_arr = points[:, 1]
 
-            # Sensor frame → image pixel
-            #   +x (forward) → smaller py  (up in image)
-            #   +y (left)    → smaller px  (left in image)
             px_arr = np.clip((cx - ly_arr * scale).astype(int), 0, sz - 1)
             py_arr = np.clip((cy - lx_arr * scale).astype(int), 0, sz - 1)
 
-            for lbl, bgr in self._LABEL_BGR.items():
-                mask = labels == lbl
-                if not mask.any():
-                    continue
-                py_m, px_m = py_arr[mask], px_arr[mask]
-                canvas[py_m, px_m] = bgr
-                # 2x2 block for labelled objects — more visible than single pixel
-                if lbl != LABEL_BACKGROUND:
-                    canvas[np.clip(py_m + 1, 0, sz - 1), px_m] = bgr
-                    canvas[py_m, np.clip(px_m + 1, 0, sz - 1)] = bgr
-                    canvas[
-                        np.clip(py_m + 1, 0, sz - 1),
-                        np.clip(px_m + 1, 0, sz - 1),
-                    ] = bgr
+            dist = np.hypot(lx_arr, ly_arr)
+            t = np.clip(dist / LIDAR_MAX_RANGE, 0.0, 1.0).astype(np.float32)
+            canvas[py_arr, px_arr, 0] = ((1.0 - t) * 255).astype(np.uint8)  # B
+            canvas[py_arr, px_arr, 1] = (t * 255).astype(np.uint8)           # G
+            canvas[py_arr, px_arr, 2] = (t * 255).astype(np.uint8)           # R
 
-        # Robot marker — filled circle + forward arrow
         cv2.circle(canvas, (cx, cy), 8, (255, 255, 255), -1)
         cv2.arrowedLine(canvas, (cx, cy), (cx, cy - 22),
                         (255, 255, 255), 2, tipLength=0.45)
 
-        # Title
         cv2.putText(canvas, f'BIRD\'S EYE VIEW  (+-{ext:.0f} m)',
                     (8, 18), cv2.FONT_HERSHEY_PLAIN, 0.9, (200, 200, 200), 1)
-
-        # Legend (top-left, below title)
-        legend_order = [LABEL_BACKGROUND, LABEL_SHELF, LABEL_CRATE, LABEL_FORKLIFT]
-        for i, lbl in enumerate(legend_order):
-            y = 32 + i * 18
-            bgr = self._LABEL_BGR[lbl]
-            cv2.rectangle(canvas, (8, y - 8), (20, y + 4), bgr, -1)
-            cv2.putText(canvas, self._LABEL_NAME[lbl], (26, y),
-                        cv2.FONT_HERSHEY_PLAIN, 0.85, (185, 185, 185), 1)
 
         return canvas
 
@@ -518,18 +411,16 @@ class LidarSensor:
             "# AMR Warehouse LiDAR dataset\n"
             f"data_root: {LIDAR_DATA_DIR}\n"
             "\n"
+            "# Labels are all 0 — no recognition model is active yet.\n"
             "classes:\n"
-            f"  - {{label: {LABEL_BACKGROUND}, name: background}}\n"
-            f"  - {{label: {LABEL_SHELF},      name: shelf}}\n"
-            f"  - {{label: {LABEL_CRATE},      name: crate}}\n"
-            f"  - {{label: {LABEL_FORKLIFT},   name: forklift}}\n"
+            "  - {label: 0, name: unlabeled}\n"
             "\n"
             "splits:\n"
             "  train: train/\n"
             "  val:   val/\n"
             "\n"
             "# scans/{frame:06d}.npy   float32  (N, 4)  x y z intensity\n"
-            "# labels/{frame:06d}.npy  int32    (N,)    class index\n"
+            "# labels/{frame:06d}.npy  int32    (N,)    all zeros\n"
             "#\n"
             "# Coordinate frame: sensor (robot-relative)\n"
             "#   +x forward   +y left   +z up\n"
