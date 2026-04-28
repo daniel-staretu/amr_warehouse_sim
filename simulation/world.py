@@ -5,7 +5,7 @@ import pybullet_data
 from config import *
 
 _ASSETS       = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'assets'))
-_SHELF_OBJ    = os.path.join(_ASSETS, 'shelf',    'eb_metal_shelf_01.obj')
+_SHELF_OBJ    = os.path.join(_ASSETS, 'shelf',    'eb_metal_shelf_01_ds.obj')
 _FORKLIFT_OBJ = os.path.join(_ASSETS, 'forklift', 'Forklift.obj')
 
 

@@ -81,8 +81,9 @@ LABEL_FORKLIFT   = 3
 #   scans/{frame:06d}.npy   float32  (N, 4)  columns: x  y  z  intensity
 #   labels/{frame:06d}.npy  int32    (N,)    per-point semantic class
 # 80 / 20 train / val split (every 5th frame goes to val).
-COLLECT_LIDAR_DATA = False
-LIDAR_DATA_DIR     = 'training_data/lidar'
+COLLECT_LIDAR_DATA    = True
+LIDAR_DATA_DIR        = 'training_data/lidar'
+DATA_COLLECTION_SCANS = 1500   # stop simulation automatically after this many frames
 
 # ---------------------------------------------------------------------------
 # Image data collection
@@ -97,7 +98,7 @@ LIDAR_DATA_DIR     = 'training_data/lidar'
 #
 # Label indices match the LABEL_* constants above.
 # 80 / 20 train / val split (every 5th frame → val/).
-COLLECT_IMAGE_DATA      = False
+COLLECT_IMAGE_DATA      = True
 IMAGE_DATA_DIR          = 'training_data/images'
 IMAGE_COLLECTOR_WIDTH   = 640
 IMAGE_COLLECTOR_HEIGHT  = 480

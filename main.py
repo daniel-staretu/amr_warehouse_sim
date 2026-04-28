@@ -38,8 +38,12 @@ SCATTERED_CRATES = [
     ( 4.0, -6.0),   # south aisle between x=0 and x=8 columns
 ]
 
-def pick_random_start(obstacles):
-    """Return a random free grid position for the robot spawn point."""
+def pick_random_start(obstacles, near=None, radius=6.0):
+    """Return a random free grid position for the robot spawn point.
+
+    If *near* is given, only cells within *radius* metres are considered.
+    Falls back to an unconstrained pick if no cells satisfy the constraint.
+    """
     obs_set = set(obstacles)
     free = []
     x = -(MAP_WIDTH / 2)
@@ -47,9 +51,12 @@ def pick_random_start(obstacles):
         y = -(MAP_HEIGHT / 2)
         while y <= MAP_HEIGHT / 2:
             if (x, y) not in obs_set:
-                free.append((x, y))
+                if near is None or math.hypot(x - near[0], y - near[1]) <= radius:
+                    free.append((x, y))
             y += RESOLUTION
         x += RESOLUTION
+    if not free:
+        return pick_random_start(obstacles)  # relax constraint and retry
     return random.choice(free)
 
 
@@ -96,6 +103,9 @@ def main():
     # 2. Spawn Robot
     if OBSTACLE_TEST_MODE:
         start_xy = (-12.0, -13.0)
+    elif COLLECT_LIDAR_DATA and world.forklift_ids:
+        fpos, _ = p.getBasePositionAndOrientation(world.forklift_ids[0])
+        start_xy = pick_random_start(obstacles, near=(fpos[0], fpos[1]), radius=6.0)
     else:
         start_xy = pick_random_start(obstacles)
     print(f"Start position: ({start_xy[0]:.2f}, {start_xy[1]:.2f})")
@@ -203,6 +213,10 @@ def main():
             if step % LIDAR_INTERVAL == 0:
                 cam_frame = image_collector.capture(robot_state)
                 points, _ = lidar.scan(camera_frame=cam_frame)
+
+                if COLLECT_LIDAR_DATA and lidar._frame >= DATA_COLLECTION_SCANS:
+                    print(f"Collected {DATA_COLLECTION_SCANS} scans — stopping.")
+                    break
 
                 with _replan_lock:
                     replan_active = _replan['active']
