@@ -152,6 +152,7 @@ def main():
     print("Starting simulation... (Ctrl+C to quit)")
     step = 0
     last_replan_obs_pos = []
+    _goal_retry_step = 0   # earliest step at which we may retry pick_random_goal
 
     # Async replan state — robot keeps moving while the planner runs in a thread
     _replan      = {'active': False, 'result': None, 'obstacles': []}
@@ -190,7 +191,7 @@ def main():
 
             # Check if current goal has been reached
             dist_to_goal = math.hypot(goal_pos[0] - robot_state[0], goal_pos[1] - robot_state[1])
-            if dist_to_goal < GOAL_THRESHOLD:
+            if dist_to_goal < GOAL_THRESHOLD and step >= _goal_retry_step:
                 print(f"Goal ({goal_pos[0]:.2f}, {goal_pos[1]:.2f}) reached! Picking new goal...")
                 clear_path(line_ids)
                 new_goal, new_path = pick_random_goal(planner,
@@ -199,11 +200,15 @@ def main():
                 if new_goal is not None:
                     goal_pos, path = new_goal, new_path
                     last_replan_obs_pos = []
+                    _goal_retry_step = 0
                     print(f"New goal: ({goal_pos[0]:.2f}, {goal_pos[1]:.2f})")
                     controller.set_path(to_xy(path))
                     line_ids = draw_path(to_xy(path))
                 else:
-                    line_ids = []  # retry next iteration
+                    # Back off for ~2 LiDAR scans so dynamic obstacles refresh
+                    # before retrying; prevents a tight busy-loop of failed attempts.
+                    _goal_retry_step = step + LIDAR_INTERVAL * 2
+                    line_ids = []
 
             # Compute and apply control
             v, omega = controller.compute_control(robot_state)

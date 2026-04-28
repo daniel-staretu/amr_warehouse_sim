@@ -10,6 +10,9 @@ navigation/heuristic_*.pt
 # Generated visualisations
 cost_map.png
 
+# Scratch / skeleton generation scripts
+gen_skeleton.py
+
 # Dissertation folder
 dizertatie/
 

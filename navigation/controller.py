@@ -33,10 +33,22 @@ class PurePursuitController:
         rx, ry, ryaw = robot_state
 
         # --- Advance past waypoints the robot has already passed ---
+        # Use segment-projection: advance from i to i+1 only when the robot has
+        # moved past the END of segment i→i+1 (parametric t ≥ 1.0).  The old
+        # proximity check (dist < threshold) cascaded through 2+ waypoints at
+        # once, causing the robot to skip turns at the start of every new path.
         while self.last_index < len(self.path) - 1:
-            dist = math.hypot(self.path[self.last_index][0] - rx,
-                              self.path[self.last_index][1] - ry)
-            if dist < LOOKAHEAD_DISTANCE * 0.5:
+            px, py = self.path[self.last_index]
+            qx, qy = self.path[self.last_index + 1]
+            seg_dx = qx - px
+            seg_dy = qy - py
+            seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
+            if seg_len_sq < 1e-12:
+                self.last_index += 1
+                continue
+            # t = 0 at path[i], t = 1 at path[i+1]; advance when robot past path[i+1]
+            t = ((rx - px) * seg_dx + (ry - py) * seg_dy) / seg_len_sq
+            if t >= 1.0:
                 self.last_index += 1
             else:
                 break

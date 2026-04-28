@@ -17,7 +17,7 @@ from config import MAP_WIDTH, MAP_HEIGHT
 # Goal-selection constants — kept here so replanner.py is self-contained.
 MIN_GOAL_DISTANCE = 3.0   # new goal must be at least this far from the robot (m)
 MAP_MARGIN        = 1.0   # keep goals away from outer walls (m)
-GOAL_CLEARANCE    = 0.0   # C-space inflation already provides robot-radius margin
+GOAL_CLEARANCE    = 0.5   # one extra cell of margin ensures goals are in open space
 
 
 def to_xy(path):
