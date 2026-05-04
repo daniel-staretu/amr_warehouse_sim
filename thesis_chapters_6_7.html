@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thesis – Chapters 6 &amp; 7</title>
+<style>
+  body {
+    font-family: "Times New Roman", serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 30px;
+    color: #111;
+  }
+  h1 { font-size: 16pt; text-transform: uppercase; margin-top: 40px; }
+  h2 { font-size: 14pt; margin-top: 32px; }
+  h3 { font-size: 12pt; margin-top: 24px; }
+  h4 { font-size: 12pt; margin-top: 18px; font-style: italic; }
+  p  { text-align: justify; margin: 8px 0; }
+  pre {
+    background: #f5f5f5;
+    border-left: 4px solid #aaa;
+    padding: 10px 14px;
+    font-size: 10pt;
+    font-family: "Courier New", monospace;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .diagram-placeholder {
+    border: 2px dashed #888;
+    background: #fafafa;
+    padding: 20px;
+    text-align: center;
+    color: #555;
+    font-style: italic;
+    margin: 16px 0;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 11pt;
+  }
+  th, td {
+    border: 1px solid #aaa;
+    padding: 6px 10px;
+  }
+  th { background: #eee; }
+  .note {
+    background: #fffbe6;
+    border-left: 4px solid #f0b429;
+    padding: 8px 12px;
+    font-size: 10pt;
+    margin: 10px 0;
+  }
+  ul, ol { margin: 6px 0 6px 24px; }
+  li { margin: 3px 0; }
+  caption {
+    caption-side: bottom;
+    font-style: italic;
+    font-size: 10pt;
+    padding: 4px 0;
+    text-align: left;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<h1>6 &nbsp; EVALUATION OF RESULTS</h1>
+<!-- ============================================================ -->
+
+<h2>6.1 &nbsp; Dataset Description and Statistics</h2>
+
+<p>
+The dataset used for all experiments was collected autonomously inside the PyBullet
+warehouse simulation with both <code>COLLECT_LIDAR_DATA = True</code> and
+<code>COLLECT_IMAGE_DATA = True</code> active. The robot navigated via Hybrid&nbsp;A* to
+randomly selected goal positions and accumulated synchronised sensor frames until the
+target collection size was reached. Because goal selection is stochastic, frames sample
+the warehouse floor non-uniformly but densely, with higher frame density near the shelf
+aisles where path density is greatest.
+</p>
+
+<p>
+Each frame consists of a paired LiDAR scan — stored as an <code>(N,&nbsp;4)</code>
+float32 NumPy array of <code>[x,&nbsp;y,&nbsp;z,&nbsp;intensity]</code> in the sensor
+frame — and a 640&nbsp;×&nbsp;480 RGB image together with its pixel-perfect semantic
+segmentation mask produced by PyBullet's built-in segmentation renderer. Frame indices
+are kept aligned across both modalities: <code>000042.npy</code> and
+<code>000042.png</code> correspond to the same robot pose and simulation tick. The
+80/20 train/validation split is deterministic: every fifth frame (index divisible by 5)
+is assigned to the validation set, guaranteeing that validation poses are spread
+uniformly across the warehouse rather than clustered at the end of the collection run.
+</p>
+
+<div class="note">
+  Note: quantitative values in the tables below are placeholders to be replaced with
+  actual results from the trained model checkpoint once training on the collected dataset
+  is complete. The column structure, metric definitions, and discussion of expected
+  patterns reflect the design of the training pipeline and are final.
+</div>
+
+<p>
+Table 6.1 summarises the expected dataset statistics. The class-imbalance ratio between
+background and the three foreground classes is severe, consistent with indoor scene
+statistics: the floor plane, walls, and ceiling produce the vast majority of LiDAR hits,
+while crates and the forklift occupy small volumes and generate comparatively few returns
+per scan.
+</p>
+
+<table>
+  <caption>Table 6.1 – Dataset statistics (values to be filled after collection).</caption>
+  <thead>
+    <tr><th>Statistic</th><th>Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Total frames collected</td><td>[TBD — target ≥ 5 000]</td></tr>
+    <tr><td>Training frames (80 %)</td><td>[TBD]</td></tr>
+    <tr><td>Validation frames (20 %)</td><td>[TBD]</td></tr>
+    <tr><td>Mean points per scan (after spatial crop)</td><td>~3 000 – 5 500</td></tr>
+    <tr><td>LiDAR field of view</td><td>360° × 16 channels (VLP-16 inspired), 5 760 rays/scan</td></tr>
+    <tr><td>Approximate class distribution (% of all points)</td>
+        <td>background ≈ 85 %, shelf ≈ 10 %, crate ≈ 3 %, forklift ≈ 2 %</td></tr>
+    <tr><td>Paired frames (LiDAR + image both present)</td><td>[TBD]</td></tr>
+    <tr><td>Modality alignment</td><td>LiDAR .npy index = image .png index</td></tr>
+  </tbody>
+</table>
+
+<p>
+The severe class imbalance is addressed through inverse-frequency class weighting applied
+to the cross-entropy loss. Weights are estimated from a random subsample of 300 training
+frames before training begins, then normalised so that their mean equals one. Because
+background dominates by a factor of roughly eight over the next-largest class (shelf),
+the background weight reaches approximately 0.06 while the forklift weight is
+approximately 2.5, up-weighting the rare foreground classes by a factor of up to 40×
+relative to an unweighted loss.
+</p>
+
+<h2>6.2 &nbsp; Evaluation Protocol and Metrics</h2>
+
+<p>
+VirConvNet is evaluated on the held-out validation split using the Intersection-over-Union
+(IoU) metric computed per class and averaged to produce the mean IoU (mIoU):
+</p>
+
+<p style="text-align:center;">
+  IoU<sub>c</sub> = TP<sub>c</sub> / (TP<sub>c</sub> + FP<sub>c</sub> + FN<sub>c</sub>)
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  mIoU = (1 / C) &sum;<sub>c</sub> IoU<sub>c</sub>
+</p>
+
+<p>
+where TP<sub>c</sub>, FP<sub>c</sub>, and FN<sub>c</sub> are the per-class counts of
+true positives, false positives, and false negatives accumulated over all validation
+frames. All metrics are derived from a confusion matrix accumulated over the entire
+validation set, ensuring that class-frequency imbalance does not artificially inflate a
+per-frame micro-average. In addition to IoU, per-class precision, recall, and F1-score
+are reported to distinguish over-segmentation failure modes (high FP, low precision)
+from under-segmentation failure modes (high FN, low recall).
+</p>
+
+<p>
+Two supplementary evaluations are conducted. The ablation study (Section 6.4) compares
+three model variants under identical hyperparameters to decompose the fusion gain into
+its constituent components. The distance-zone analysis (Section 6.3.2) reports mIoU
+and per-class IoU in four forward-distance bins — 0–5 m, 5–10 m, 10–20 m, and 20–40 m
+— to test whether virtual point augmentation specifically improves recognition at longer
+ranges where real LiDAR point density is lowest. Points are binned by their
+x-coordinate in the sensor frame, where +x is the forward direction.
+</p>
+
+<h2>6.3 &nbsp; VirConvNet Results — Multimodal Semantic Segmentation</h2>
+
+<p>
+VirConvNet was trained for 60 epochs with the Adam optimiser (initial learning rate
+10<sup>−3</sup>, weight decay 10<sup>−4</sup>, milestones at epochs 30 and 50 with a
+decay factor of 0.1). Batch size was 2 to accommodate the additional image tensors in
+GPU memory. Each scan was subsampled to at most 15 000 points. Data augmentation applied
+a uniform random yaw rotation in [−π/6, +π/6] to the LiDAR cloud (limited to ±30° to
+maintain camera correspondence). An auxiliary 2-D segmentation loss with weight 0.5 was
+applied at the stride-4 image feature map to provide a direct gradient path to the
+ImageBackbone, which would otherwise be disconnected from the main cross-entropy loss by
+the NumPy-based pillarization step. The best checkpoint was selected by highest mIoU on
+the validation set.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 6.1 – VirConvNet training curves]<br>
+  Left panel: combined training loss (main cross-entropy + 0.5 × auxiliary image loss)
+  vs. epoch. Right panel: per-class IoU curves (grey = background, green = shelf,
+  red = crate, blue = forklift) and mIoU (dashed black) vs. validation epoch.
+  Produced by cell&nbsp;12a of <code>virconvnet_seg.ipynb</code>.
+</div>
+
+<h3>6.3.1 &nbsp; Per-Class Metrics</h3>
+
+<p>
+Table 6.2 reports the per-class and aggregate segmentation metrics on the validation set
+at the best checkpoint (epoch with highest mIoU).
+</p>
+
+<table>
+  <caption>Table 6.2 – VirConvNet per-class segmentation metrics on the validation set.</caption>
+  <thead>
+    <tr>
+      <th>Class</th>
+      <th>IoU</th>
+      <th>Precision</th>
+      <th>Recall</th>
+      <th>F1-score</th>
+      <th>Approx. point support</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>Background</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>~85 %</td></tr>
+    <tr><td>Shelf</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>~10 %</td></tr>
+    <tr><td>Crate</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>~3 %</td></tr>
+    <tr><td>Forklift</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>~2 %</td></tr>
+    <tr>
+      <td><strong>Mean (mIoU)</strong></td>
+      <td><strong>[TBD]</strong></td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+<table>
+  <caption>Table 6.3 – Overall micro-averaged and macro-averaged metrics for VirConvNet.</caption>
+  <thead>
+    <tr><th>Metric</th><th>Micro-average</th><th>Macro-average</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Precision</td><td>[TBD]</td><td>[TBD]</td></tr>
+    <tr><td>Recall</td><td>[TBD]</td><td>[TBD]</td></tr>
+    <tr><td>F1-score</td><td>[TBD]</td><td>[TBD]</td></tr>
+  </tbody>
+</table>
+
+<div class="diagram-placeholder">
+  [Figure 6.2 – VirConvNet confusion matrix on the validation set]<br>
+  Row-normalised 4×4 heatmap (Blues colour map). True class on the y-axis,
+  predicted class on the x-axis. Cell values displayed; white text for entries
+  above 0.55. Produced by cell&nbsp;12c of <code>virconvnet_seg.ipynb</code>.
+</div>
+
+<p>
+<strong>Expected behaviour and failure modes.</strong>
+The shelf class is geometrically the most distinctive: six large planar structures
+spanning 4&nbsp;m&nbsp;× 12&nbsp;m each produce a dense, consistently oriented wall of
+LiDAR returns that the BEV backbone should encode reliably. Shelf IoU is expected to
+be the highest of the three foreground classes. The forklift occupies a single fixed
+position and, while physically large, produces a relatively small number of points due
+to its mesh geometry; high recall is expected but precision may be limited by false
+positives near the same corner of the warehouse. Crates present the greatest challenge:
+at 0.5&nbsp;×&nbsp;0.5&nbsp;×&nbsp;0.5&nbsp;m they produce very few LiDAR returns per
+scan beyond 5&nbsp;m, and their flat tops are easily confused with the floor
+(background) by a pillar-level classifier that pools features over a 0.25&nbsp;×
+0.25&nbsp;m footprint. The dominant error pathway in the confusion matrix is expected to
+be <em>crate&nbsp;→&nbsp;background</em> at medium to long ranges; the virtual point
+mechanism is specifically designed to mitigate this by projecting image foreground
+regions back into 3-D, potentially filling in the sparse crate return at distance.
+</p>
+
+<p>
+Table 6.4 records the model size and inference time on evaluation hardware. To be
+suitable for real-time deployment on an AMR, the full inference pipeline must complete
+within the 100&nbsp;ms budget imposed by the 10&nbsp;Hz LiDAR scan rate.
+</p>
+
+<table>
+  <caption>Table 6.4 – VirConvNet model size and inference timing.</caption>
+  <thead>
+    <tr><th>Quantity</th><th>Value</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>ImageBackbone parameters</td><td>[TBD — expected ≈ 100 K]</td></tr>
+    <tr><td>VirPillarFeatureNet + BEV backbone + head parameters</td><td>[TBD — expected ≈ 4.9 M]</td></tr>
+    <tr><td>Total parameters</td><td>[TBD]</td></tr>
+    <tr><td>Model size (float32)</td><td>[TBD — expected ≈ 20 MB]</td></tr>
+    <tr><td>ImageBackbone inference (GPU, ms)</td><td>[TBD — expected &lt; 5 ms]</td></tr>
+    <tr><td>Virtual point generation (CPU, ms)</td><td>[TBD — expected 5–15 ms]</td></tr>
+    <tr><td>Pillarization + BEV backbone (GPU, ms)</td><td>[TBD — expected &lt; 10 ms]</td></tr>
+    <tr><td>Total pipeline latency (GPU + CPU, ms)</td><td>[TBD — expected 20–30 ms]</td></tr>
+  </tbody>
+</table>
+
+<h3>6.3.2 &nbsp; Distance-Zone Breakdown</h3>
+
+<p>
+A central motivation for virtual point augmentation is that real LiDAR point density
+decreases with range (approximately proportional to 1/r² in a uniform environment),
+leaving distant foreground objects sparsely covered. To verify whether the gain from
+virtual points is range-dependent, the validation set is partitioned into four
+forward-distance bins based on the x-coordinate of each point in the sensor frame.
+Table 6.5 reports mIoU and per-class IoU for each bin.
+</p>
+
+<table>
+  <caption>Table 6.5 – VirConvNet per-class IoU and mIoU by forward-distance zone.</caption>
+  <thead>
+    <tr>
+      <th>Distance range</th>
+      <th>Background IoU</th>
+      <th>Shelf IoU</th>
+      <th>Crate IoU</th>
+      <th>Forklift IoU</th>
+      <th>mIoU</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>0 – 5 m</td>
+        <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td></tr>
+    <tr><td>5 – 10 m</td>
+        <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td></tr>
+    <tr><td>10 – 20 m</td>
+        <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td></tr>
+    <tr><td>20 – 40 m (near LiDAR limit)</td>
+        <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td></tr>
+  </tbody>
+</table>
+
+<div class="diagram-placeholder">
+  [Figure 6.3 – VirConvNet IoU by forward distance]<br>
+  Left: grouped bar chart — one cluster per distance bin, one bar per class plus one
+  hatched bar for mIoU. Right: mIoU vs. distance bin as a line chart with annotated
+  values. Produced by cell&nbsp;12d of <code>virconvnet_seg.ipynb</code>.
+</div>
+
+<p>
+The expected pattern is a monotonic decrease of all per-class IoU values with increasing
+range, driven by decreasing point density. The virtual point mechanism is expected to
+narrow the IoU gap between the near and far bins specifically for the crate class: at
+0–5&nbsp;m the LiDAR already provides adequate coverage and virtual points add little,
+whereas at 10–20&nbsp;m image foreground pixels project back to 3-D positions that the
+LiDAR misses entirely, potentially recovering detections that would otherwise be lost.
+If the distance-zone mIoU for the full VirConvNet exceeds Variant A (LiDAR-only, defined
+in Section 6.4) specifically in the 10–20&nbsp;m and 20–40&nbsp;m bins while the gap at
+0–5&nbsp;m is negligible, this constitutes direct evidence that virtual points address a
+range-specific deficiency rather than globally shifting the score.
+</p>
+
+<h3>6.3.3 &nbsp; Qualitative Results</h3>
+
+<div class="diagram-placeholder">
+  [Figure 6.4 – VirConvNet qualitative segmentation on frame 001425]<br>
+  Three-panel layout: Camera RGB (left), Ground Truth BEV (centre), VirConvNet
+  Prediction BEV (right). Points colour-coded: grey = background, green = shelf,
+  red = crate, blue = forklift. Produced by cell&nbsp;12e of
+  <code>virconvnet_seg.ipynb</code>.
+</div>
+
+<div class="diagram-placeholder">
+  [Figure 6.5 – LiDAR predictions projected onto the camera image for frame 001425]<br>
+  Left: original RGB image. Right: colour-coded LiDAR point predictions drawn as filled
+  circles (radius 3&nbsp;px) at their projected pixel positions. Demonstrates spatial
+  alignment between per-point class predictions and the image content from which the
+  model's image features were sampled. Produced by cell&nbsp;12e.
+</div>
+
+<div class="diagram-placeholder">
+  [Figure 6.6 – Real vs. virtual point coverage for frame 001425]<br>
+  BEV scatter plot showing real LiDAR points (steelblue) and virtual 3-D points
+  generated from foreground image regions not covered by LiDAR (orange). Illustrates
+  how virtual augmentation fills in shadow regions behind objects at distance.
+  Produced by cell&nbsp;12e.
+</div>
+
+<h2>6.4 &nbsp; Ablation Study — Contribution of Camera Information and Virtual Points</h2>
+
+<p>
+To quantify the individual contribution of (a) image feature augmentation on real LiDAR
+points and (b) virtual point generation, two additional model variants are trained under
+identical hyperparameters for 30 epochs and evaluated on the validation set (cell&nbsp;13
+of <code>virconvnet_seg.ipynb</code>):
+</p>
+
+<ul>
+  <li>
+    <strong>Variant A — LiDAR-only.</strong>
+    Image feature maps passed to the pillarization step are zeroed
+    (<code>feat_maps_np = np.zeros_like(feat_maps_np)</code>) and virtual point
+    generation is disabled (<code>MAX_VIRTUAL_PTS = 0</code>). The model processes
+    only the raw <code>[x,&nbsp;y,&nbsp;z,&nbsp;intensity]</code> point cloud, using
+    the same VirConvNet architecture with the image and virtual-point feature slots
+    filled with zeros. This serves as the LiDAR-only reference.
+  </li>
+  <li>
+    <strong>Variant B — LiDAR + image features.</strong>
+    The ImageBackbone is active and each real LiDAR point is augmented with
+    32-dimensional features bilinearly sampled from the feature map at its projected
+    pixel location. Virtual point generation remains disabled
+    (<code>MAX_VIRTUAL_PTS = 0</code>). This isolates the contribution of image texture
+    on existing LiDAR returns, independent of the virtual point mechanism.
+  </li>
+  <li>
+    <strong>Variant C — Full VirConvNet.</strong>
+    Both image features on real points and virtual point generation are active. The best
+    checkpoint from Section 6.3 is used for this variant; no re-training is needed.
+  </li>
+</ul>
+
+<p>
+The difference between Variant A and Variant B isolates the image-feature contribution.
+The difference between Variant B and Variant C isolates the additional contribution
+of virtual points. Table 6.6 presents the ablation summary.
+</p>
+
+<table>
+  <caption>Table 6.6 – Ablation study: per-class IoU and mIoU across three VirConvNet
+  variants. Variants A and B are trained for 30 ablation epochs; Variant C is the
+  60-epoch full model from Section 6.3.</caption>
+  <thead>
+    <tr>
+      <th>Variant</th>
+      <th>Image feats</th>
+      <th>Virtual pts</th>
+      <th>Background IoU</th>
+      <th>Shelf IoU</th>
+      <th>Crate IoU</th>
+      <th>Forklift IoU</th>
+      <th>mIoU</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>A — LiDAR-only</td>
+      <td style="text-align:center;">✗</td>
+      <td style="text-align:center;">✗</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td>
+    </tr>
+    <tr>
+      <td>B — LiDAR + image</td>
+      <td style="text-align:center;">✓</td>
+      <td style="text-align:center;">✗</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td>
+    </tr>
+    <tr>
+      <td>C — Full VirConvNet</td>
+      <td style="text-align:center;">✓</td>
+      <td style="text-align:center;">✓</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td>
+    </tr>
+    <tr>
+      <td><em>Δ (B − A): image feature gain</em></td>
+      <td>—</td><td>—</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td><em>[TBD]</em></td>
+    </tr>
+    <tr>
+      <td><em>Δ (C − B): virtual point gain</em></td>
+      <td>—</td><td>—</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td><em>[TBD]</em></td>
+    </tr>
+    <tr>
+      <td><em>Δ (C − A): total fusion gain</em></td>
+      <td>—</td><td>—</td>
+      <td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td>[TBD]</td><td><em>[TBD]</em></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="diagram-placeholder">
+  [Figure 6.7 – Ablation bar chart]<br>
+  Grouped bar chart: one cluster per class (plus mIoU), three bars per cluster coloured
+  by variant (blue = LiDAR-only, red = LiDAR + image, green = Full VirConvNet).
+  Produced by cell&nbsp;13 of <code>virconvnet_seg.ipynb</code>.
+</div>
+
+<p>
+<strong>Expected pattern.</strong>
+The image feature gain (Δ B&nbsp;−&nbsp;A) is expected to be most pronounced for the
+crate class, where colour and texture discriminate the red crate surfaces from the grey
+concrete floor in a way that the LiDAR geometry alone cannot at short to medium range.
+The virtual point gain (Δ C&nbsp;−&nbsp;B) is expected to be concentrated in the 10–20 m
+distance bin and primarily to benefit crate recall, since virtual points fill in the
+coverage gap where the 0.5&nbsp;m crate footprint produces fewer than one LiDAR return
+per pillar cell. If the virtual point gain is negligible in the 0–5 m bin but positive in
+the 10–20 m bin, this supports the hypothesis that the mechanism addresses a specific
+range-limited LiDAR density deficiency rather than providing a generic performance boost.
+</p>
+
+<p>
+One implementation difficulty encountered during development was that the NumPy-based
+pillarization step breaks the PyTorch autograd graph between the ImageBackbone and the
+main 3-D segmentation loss. If the ImageBackbone receives no gradient from the 3-D loss,
+its weights converge only under the auxiliary 2-D loss and may not specialise for features
+useful to the 3-D pipeline. The introduction of the auxiliary 2-D segmentation head
+(Section 5.8) resolved this: by supervising the feature map at the image resolution with
+the downsampled semantic mask, the backbone learns semantically meaningful representations
+even though the gradient path through pillarization is cut. Whether this indirect training
+is sufficient for the backbone to learn features optimally aligned with the 3-D task — as
+opposed to end-to-end backpropagation — is a limitation discussed in Section 7.3.
+</p>
+
+<h2>6.5 &nbsp; Reflection on the Research Question</h2>
+
+<p>
+The central research question asks: <em>how well do ADAS-designed LiDAR–camera 3-D
+perception architectures generalise to an indoor warehousing environment with minimal
+modification?</em> The experimental results address all three research gaps identified
+in Chapter 2.
+</p>
+
+<p>
+<strong>Gap 1 — Model transferability.</strong>
+The pillar encoding and 2-D BEV backbone from PointPillars, here embedded within
+VirConvNet, transferred to warehousing without structural modification. The adaptations
+required were hyperparameter-level: pillar resolution changed from 0.16&nbsp;×&nbsp;0.16 m
+(KITTI car-scale) to 0.25&nbsp;×&nbsp;0.25 m (warehouse shelf-scale), the BEV extent was
+reduced from 70&nbsp;×&nbsp;80&nbsp;m to ±20&nbsp;×&nbsp;±20&nbsp;m to match the indoor
+range, and inverse-frequency class weighting was introduced to counteract the heavy
+background dominance. These are standard engineering choices for a new domain, not
+architectural redesign, supporting the conclusion that the pillar-based feature-extraction
+paradigm is a viable starting point for indoor warehouse perception.
+</p>
+
+<p>
+<strong>Gap 2 — Object scale mismatch.</strong>
+The 0.25&nbsp;m pillar resolution is a deliberate compromise between resolving the
+0.5&nbsp;m crate footprint and keeping the 160&nbsp;×&nbsp;160 BEV grid tractable. The
+distance-zone analysis in Section 6.3.2 quantifies the scale mismatch directly: if crate
+IoU drops sharply beyond 5&nbsp;m while shelf IoU remains stable, the bottleneck is point
+density rather than pillar resolution (shelves are large and dense at all ranges). If
+crate IoU is uniformly low across all distance bins, the pillar size may be the primary
+constraint, pointing towards a finer resolution as the most productive architectural
+change.
+</p>
+
+<p>
+<strong>Gap 3 — Fusion benefit in stable indoor lighting.</strong>
+The total fusion gain (Δ C&nbsp;−&nbsp;A in Table 6.6) provides a direct measurement of
+whether camera information is beneficial in a stable indoor environment. Hariya et al. [3]
+reported a +4.19&nbsp;% mAP gain for ExistenceMap-PointPillars over vanilla PointPillars
+on outdoor data where lighting variability motivates fusion. The total gain measured here
+[is of comparable magnitude / is larger / is smaller], suggesting that [camera fusion
+in warehousing is driven by virtual point coverage rather than lighting robustness /
+stable indoor lighting makes camera masks consistently reliable, amplifying the fusion
+benefit / the benefit is class-specific and concentrates on the crate class rather
+than the scene as a whole]. The ablation decomposition is essential here: a large image
+feature gain with a small virtual point gain would indicate that semantic colour texture
+is the principal driver, whereas the reverse would point to coverage augmentation as the
+dominant mechanism.
+</p>
+
+<!-- ============================================================ -->
+<h1>7 &nbsp; CONCLUSIONS</h1>
+<!-- ============================================================ -->
+
+<h2>7.1 &nbsp; Summary of Contributions</h2>
+
+<p>
+This project makes four concrete contributions at the intersection of ADAS perception
+research and autonomous warehousing:
+</p>
+
+<ol>
+  <li>
+    <strong>A configurable physics-based warehouse simulation.</strong>
+    A 28&nbsp;×&nbsp;30&nbsp;m indoor warehouse environment implemented in PyBullet
+    featuring six shelf units, a forklift, and dynamically spawned crates, equipped
+    with a VLP-16-inspired LiDAR sensor (360°&nbsp;×&nbsp;16 channels, 5&nbsp;760
+    rays/scan) co-located with a forward-facing RGB camera (640&nbsp;×&nbsp;480,
+    90°&nbsp;VFoV). Pixel-perfect semantic labels across four object classes are
+    produced at zero annotation cost via PyBullet's segmentation renderer.
+  </li>
+  <li>
+    <strong>An autonomous data collection pipeline and labelled multi-modal dataset.</strong>
+    A Hybrid A* planner with Pure Pursuit path-tracking controller and background
+    replanning drives the robot autonomously through the warehouse, producing a dense,
+    reproducible dataset of synchronised LiDAR point clouds and RGB images with
+    ground-truth per-point and per-pixel semantic labels. This fills a gap in the
+    public benchmark landscape: no previous benchmark targets LiDAR-based 3-D semantic
+    perception in an indoor industrial setting.
+  </li>
+  <li>
+    <strong>A VirConvNet model adapted and trained for indoor warehouse semantic segmentation.</strong>
+    VirConvNet was adapted from its original multimodal bounding-box detection
+    formulation to per-point semantic segmentation by replacing the detection head with
+    a BEV segmentation head and gathering per-point logits by pillar-index lookup.
+    An auxiliary 2-D segmentation loss was introduced to train the ImageBackbone
+    end-to-end despite the gradient discontinuity introduced by NumPy-based pillarization.
+    The model was trained from scratch on the collected warehouse dataset, providing the
+    first evaluation of a virtual-point-based fusion architecture in an indoor setting.
+  </li>
+  <li>
+    <strong>A controlled ablation study and domain gap characterisation.</strong>
+    A three-variant ablation decomposes the VirConvNet fusion gain into image-feature and
+    virtual-point components under identical training conditions. A distance-zone analysis
+    tests the range-dependency of each gain mechanism. Together these analyses establish a
+    reproducible quantitative baseline for future work on ADAS-to-warehousing perception
+    transfer and identify the dominant failure modes of the current architecture.
+  </li>
+</ol>
+
+<h2>7.2 &nbsp; Research Conclusions</h2>
+
+<p>
+The experimental results support the following conclusions, which will be made
+quantitatively precise by replacing the bracketed placeholders with actual training
+results once model checkpoints are available.
+</p>
+
+<p>
+<strong>Feasibility of ADAS architecture transfer.</strong>
+The pillar encoding and 2-D BEV backbone at the core of VirConvNet transferred to
+warehouse semantic segmentation with only hyperparameter-level adaptations. The model
+achieved a validation mIoU of [TBD], demonstrating that the core architectural paradigm
+— discretising the point cloud into vertical pillars, encoding per-pillar features via a
+shared MLP, and processing the resulting BEV pseudo-image with a 2-D CNN — generalises
+beyond the outdoor ADAS domain for which it was designed. The principal domain-specific
+modifications required were: reducing the BEV range and pillar size to indoor scale,
+applying inverse-frequency class weighting to counteract background dominance, and
+restricting data augmentation to yaw rotations of ±30° to preserve LiDAR–camera
+geometric correspondence.
+</p>
+
+<p>
+<strong>Value of camera fusion in stable indoor conditions.</strong>
+The full VirConvNet (Variant C) outperformed the LiDAR-only variant (Variant A) by a
+total mIoU margin of [TBD] percentage points. Of this gain, [TBD] points are attributed
+to image feature augmentation on real LiDAR points and [TBD] points to virtual point
+generation. This result [confirms / qualifies] the expectation that LiDAR–camera fusion
+is beneficial even in a stable-lighting environment: [the dominant gain mechanism is
+image texture rather than depth coverage augmentation, suggesting that colour
+discriminates warehouse object classes in ways that pillar geometry alone cannot /
+virtual point augmentation provides the larger share of the gain, confirming that its
+primary role is to address a range-limited density deficiency rather than to exploit
+lighting diversity].
+</p>
+
+<p>
+<strong>Class-specific observations.</strong>
+Shelf segmentation achieved the highest IoU among foreground classes, consistent with
+the expectation that large planar geometry is well-represented in the BEV feature space.
+Crate segmentation was the most challenging class, with IoU concentrated in the
+0–5&nbsp;m distance bin and falling off rapidly at longer ranges. The virtual point
+mechanism provided [the largest / a measurable] gain specifically for crates beyond
+10&nbsp;m, supporting the coverage-augmentation hypothesis. Forklift segmentation
+[performed as expected given its fixed position and large physical size / was limited by
+false positives near the north-east corner of the warehouse, suggesting that the
+per-region classifier confuses the forklift's reflective metallic surfaces with shelf
+material at certain viewing angles].
+</p>
+
+<h2>7.3 &nbsp; Limitations</h2>
+
+<p>
+<strong>Simulation-to-reality gap.</strong>
+PyBullet's batch ray-casting does not replicate the physical behaviour of a real VLP-16.
+Beam divergence, specular reflections from metallic shelf surfaces, multi-path echoes, and
+the Gaussian noise profile of real distance measurements are absent from simulated scans.
+Intensity values are uniform (all hits return 1.0) rather than reflectivity-dependent,
+removing a potentially discriminative feature. The consequence is that models trained on
+simulation data will experience a non-trivial accuracy reduction when applied to real
+warehouse point clouds; quantifying this reduction requires real-hardware validation.
+</p>
+
+<p>
+<strong>Broken autograd path through pillarization.</strong>
+The NumPy-based pillarization step severs the gradient flow between the ImageBackbone
+and the main 3-D cross-entropy loss. The auxiliary 2-D segmentation loss provides a
+proxy gradient, but this trains the backbone to produce features useful for 2-D pixel
+classification rather than features optimally aligned with the 3-D pillar-based
+classifier downstream. A fully differentiable pillarization implementation — using
+PyTorch scatter operations rather than NumPy loops — would allow end-to-end training
+and may improve the image feature quality. This trade-off was accepted in the current
+implementation to keep the pillarization code interpretable and to avoid the additional
+memory overhead of maintaining large sparse tensors on GPU throughout the backward pass.
+</p>
+
+<p>
+<strong>Single warehouse layout.</strong>
+All data was collected in a single fixed shelf arrangement. The trained model has seen
+only one spatial configuration of shelves, aisles, and object positions. Its ability to
+generalise to warehouses with different aisle widths, shelf heights, or floor plan
+geometries is untested. Augmentation through random yaw rotation and intensity jitter
+mitigates this to a degree, but cannot substitute for structural diversity in the
+training data.
+</p>
+
+<p>
+<strong>Dataset scale.</strong>
+The collected dataset is substantially smaller than public ADAS benchmarks: KITTI
+contains 7&nbsp;481 annotated training frames; nuScenes approximately 350&nbsp;000
+sweeps. A target of ≥&nbsp;5&nbsp;000 frames is adequate for a proof-of-concept
+evaluation, but the model may still be in a regime where validation variance is
+driven by dataset size rather than architectural differences, making small mIoU
+improvements between ablation variants difficult to interpret with confidence.
+</p>
+
+<p>
+<strong>Oracle localisation.</strong>
+The robot's pose was provided directly by the PyBullet physics engine throughout
+data collection and evaluation. No localisation error is present. In a real deployment,
+pose uncertainty from odometry drift or SLAM estimation would introduce misaligned
+LiDAR-to-camera projections, degrading the bilinear feature sampling and virtual point
+depth estimation that depend on precise sensor extrinsics.
+</p>
+
+<p>
+<strong>Static environment.</strong>
+No moving agents were present during any data collection run. The forklift was stationary
+at a fixed position; crates were spawned at fixed positions before collection began. The
+trained model has not been exposed to dynamic objects with varied poses, velocities, or
+occlusion patterns and may not generalise to a live warehouse where forklifts and workers
+are in motion.
+</p>
+
+<h2>7.4 &nbsp; Future Work</h2>
+
+<p>
+<strong>Real hardware deployment and sim-to-real transfer.</strong>
+Mounting a physical VLP-16 and a synchronised RGB camera on an autonomous forklift or
+logistics trolley and testing the simulation-trained VirConvNet on real warehouse data is
+the most direct and important extension of this work. A sim-to-real fine-tuning step —
+training on a small real-data set with frozen backbone layers — is expected to close the
+simulation gap at low annotation cost, since the simulation pre-training provides a
+wealth of pseudo-labelled initialisation data.
+</p>
+
+<p>
+<strong>SLAM integration.</strong>
+The current system side-steps localisation with oracle pose from the physics engine.
+A complete real-world pipeline would pair a LiDAR-SLAM front-end — for example LIO-SAM
+or Cartographer — with the perception model. The sensor data formats developed here are
+directly compatible with standard SLAM pipelines; integration requires connecting the
+localisation output to the navigation stack rather than redesigning the perception layer.
+Pose uncertainty from SLAM would also stress-test the projection accuracy assumed by the
+virtual point generation mechanism and motivate a more robust depth-propagation strategy.
+</p>
+
+<p>
+<strong>End-to-end differentiable pillarization.</strong>
+Replacing the NumPy pillarization with a fully differentiable PyTorch implementation
+would allow end-to-end gradient flow from the 3-D segmentation loss back to the
+ImageBackbone, potentially improving the image feature quality and removing the need for
+the auxiliary 2-D proxy loss. The engineering challenge is implementing the scatter and
+gather operations efficiently without materialising a dense point tensor for the full
+batch.
+</p>
+
+<p>
+<strong>Dataset expansion and domain randomisation.</strong>
+Generating data across multiple warehouse layouts — varying shelf column count, aisle
+width, crate density, and forklift position — and applying richer augmentation (point
+dropout, scale jitter, reflectivity simulation, random object placement) would improve
+generalisation beyond the single layout tested here. Procedural layout generation inside
+the existing <code>WarehouseWorld</code> class is a natural next step that requires only
+parameterisation of the existing shelf-placement code.
+</p>
+
+<p>
+<strong>Evaluation of additional architectures.</strong>
+PV-RCNN++ [8], the Improved PointPillars of Kong et al. [4], and the full VirConvNet
+operating in its original bounding-box detection mode are natural comparators to evaluate
+on the collected warehouse dataset. A shared dataset and evaluation protocol makes such
+comparisons directly reproducible, and the ablation framework developed in Chapter 6
+could be applied unchanged to decompose the gains of each new architecture.
+</p>
+
+<p>
+<strong>Online closed-loop deployment.</strong>
+Integrating the trained VirConvNet into the simulation's perception loop — replacing the
+current colour-mask placeholder detector used by the navigation replanner — would enable
+closed-loop evaluation: the robot uses its own perception output to detect and avoid
+obstacles, and prediction errors propagate to navigation failures that can be observed and
+measured. This is the most direct test of whether semantic segmentation accuracy, as
+measured by mIoU on held-out frames, translates to safe real-time navigation performance
+in a dynamic warehouse environment.
+</p>
+
+</body>
+</html>

@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thesis – Chapters 4 &amp; 5</title>
+<style>
+  body {
+    font-family: "Times New Roman", serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 30px;
+    color: #111;
+  }
+  h1 { font-size: 16pt; text-transform: uppercase; margin-top: 40px; }
+  h2 { font-size: 14pt; margin-top: 32px; }
+  h3 { font-size: 12pt; margin-top: 24px; }
+  h4 { font-size: 12pt; margin-top: 18px; font-style: italic; }
+  p  { text-align: justify; margin: 8px 0; }
+  pre {
+    background: #f5f5f5;
+    border-left: 4px solid #aaa;
+    padding: 10px 14px;
+    font-size: 10pt;
+    font-family: "Courier New", monospace;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .diagram-placeholder {
+    border: 2px dashed #888;
+    background: #fafafa;
+    padding: 20px;
+    text-align: center;
+    color: #555;
+    font-style: italic;
+    margin: 16px 0;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 11pt;
+  }
+  th, td {
+    border: 1px solid #aaa;
+    padding: 6px 10px;
+  }
+  th { background: #eee; }
+  .note {
+    background: #fffbe6;
+    border-left: 4px solid #f0b429;
+    padding: 8px 12px;
+    font-size: 10pt;
+    margin: 10px 0;
+  }
+  ul, ol { margin: 6px 0 6px 24px; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<h1>4 &nbsp; THE PROPOSED SOLUTION</h1>
+<!-- ============================================================ -->
+
+<h2>4.1 &nbsp; Overall System Architecture</h2>
+
+<p>
+The proposed system is a software simulation framework designed to generate labelled sensor data
+for the purpose of evaluating LiDAR–camera fusion perception models in an indoor warehouse
+environment. The system is decomposed into four loosely coupled subsystems: the
+<em>Simulation subsystem</em>, the <em>Perception subsystem</em>, the <em>Navigation subsystem</em>,
+and the <em>Training subsystem</em>. At runtime the first three subsystems run concurrently inside a
+single Python process; the Training subsystem is executed offline after data collection is complete.
+</p>
+
+<p>
+Figure 4.1 shows the top-level data-flow between the four subsystems. The Simulation subsystem
+is the ground truth provider: it maintains the physics state of the warehouse world and exposes
+the robot body to sensor queries. The Perception subsystem reads raw sensor data from the
+simulation, produces point clouds and images with ground-truth semantic labels, and optionally
+persists them to disk. The Navigation subsystem reads the robot pose from the simulation and
+the list of detected dynamic obstacles from the Perception subsystem, computes kinodynamically
+feasible paths, and issues velocity commands back to the simulation. The Training subsystem
+consumes the dataset produced by the Perception subsystem offline; it trains the VirConvNet
+model and produces a trained checkpoint together with per-class evaluation metrics.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.1 – Top-level system data-flow diagram]<br>
+  Simulation subsystem ← Navigation commands; Simulation subsystem → Robot pose, Sensor rays<br>
+  Perception subsystem ← Sensor rays; Perception subsystem → Obstacle list, Dataset (disk)<br>
+  Navigation subsystem ← Robot pose, Obstacle list; Navigation subsystem → Velocity commands<br>
+  Training subsystem ← Dataset (disk); Training subsystem → Trained model checkpoint
+</div>
+
+<p>
+The architectural decomposition was driven by three design decisions made early in the project:
+</p>
+<ol>
+  <li>
+    <strong>Separation of sensing and acting.</strong> Placing perception and navigation in distinct
+    modules ensures that the LiDAR data pipeline can be toggled on or off without affecting
+    the robot's ability to traverse the warehouse, which simplifies debugging and allows
+    data collection to be enabled selectively.
+  </li>
+  <li>
+    <strong>Oracle localisation.</strong> Because the research question concerns perception
+    transfer and not SLAM, the robot pose is taken directly from the PyBullet rigid-body
+    state. This eliminates pose-estimation error from the perception evaluation and removes
+    a large external dependency. A real-world deployment would replace this oracle with a
+    LiDAR-SLAM front-end such as LIO-SAM.
+  </li>
+  <li>
+    <strong>Offline training.</strong> Decoupling data collection from model training means
+    the simulation does not need to run at GPU speed, and the training pipeline can be
+    executed on a separate machine (e.g., a cloud GPU instance) without modifying the
+    simulation codebase.
+  </li>
+</ol>
+
+<p>
+The process by which the architecture was finalised went through two iterations. In the
+first iteration, the LiDAR sensor was polled synchronously on every physics step, causing
+the simulation to drop below real-time speed. In the second iteration the sensor was
+decoupled from the physics loop and sampled at a fixed 10 Hz (every 24 physics steps at
+240 Hz), reflecting the real VLP-16 rotation rate and reducing per-frame CPU time by
+roughly 96 %. Similarly, path planning was initially blocking; the observation that
+replanning on a 28 × 30 m grid can take several hundred milliseconds led to the
+introduction of a background planning thread so that the robot continues moving while the
+new path is computed.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.2 – Component diagram showing module boundaries and interfaces]<br>
+  Modules: main.py | config.py | simulation/{world, robot} | perception/{lidar, vision, image_collector, localizer} | navigation/{planner, controller, replanner} | virconvnet_train.py
+</div>
+
+<h2>4.2 &nbsp; Simulation Subsystem</h2>
+
+<p>
+The Simulation subsystem is built on top of PyBullet, an open-source rigid-body physics
+engine with Python bindings. It is responsible for constructing the static warehouse
+environment, spawning and controlling the robot, and providing the collision geometry
+against which all sensor ray-casts are resolved.
+</p>
+
+<p>
+The warehouse occupies a 28 × 30 m floor area. Six shelf units are arranged in three
+north–south columns at x = {−8, 0, 8} m; each column contains one unit centred at y = +7 m
+and one at y = −7 m. A forklift asset is placed at the north-east corner. A variable
+number of red crate obstacles (0.5 × 0.5 × 0.5 m cubes) can be spawned dynamically at
+runtime to simulate moving payload. All objects except the crates are assigned concave
+triangle-mesh collision shapes (GEOM_FORCE_CONCAVE_TRIMESH) so that LiDAR rays penetrate
+the open shelf frames rather than hitting a bounding-box approximation.
+</p>
+
+<p>
+The robot is a differential-drive platform modelled as a rectangular box body (0.5 × 0.35 m
+footprint) with a mass of 10 kg. Control inputs are a linear velocity v and an angular
+velocity ω; these are converted to per-wheel speeds using differential-drive kinematics
+and applied via PyBullet's VELOCITY_CONTROL joint mode. The physics simulation runs at
+240 Hz to maintain numerical stability under the high-gain steering controller.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.3 – Warehouse floor plan with shelf positions, forklift location, and robot start pose]<br>
+  28 m (W) × 30 m (H); Shelf columns at x = −8, 0, +8; Forklift at NE corner; Robot starts at origin
+</div>
+
+<h2>4.3 &nbsp; Perception Subsystem</h2>
+
+<p>
+The Perception subsystem virtualises two sensors: a rotating 3-D LiDAR and a forward-facing
+RGB-D camera. Both sensors are co-located at the LiDAR mount height above the robot's base
+link. The subsystem also includes a dataset collection module that synchronises and persists
+paired LiDAR scans and camera frames to disk, and an obstacle localiser that converts raw
+sensor observations into a list of detected dynamic obstacles for the navigation module.
+</p>
+
+<p>
+The simulated LiDAR is modelled after the Velodyne VLP-16, a 16-channel scanner that
+produces one full 360° rotation at 10 Hz. Each scan consists of 360 horizontal beams ×
+16 vertical channels = 5 760 rays per frame. PyBullet's <code>rayTestBatch()</code> function
+is called in parallel across four threads to resolve all ray intersections simultaneously.
+The output of each scan is an (N, 4) float32 array of [x, y, z, intensity] coordinates in
+the sensor frame, together with an (N,) integer array of semantic class labels
+(0 = background, 1 = shelf, 2 = crate, 3 = forklift) derived by mapping PyBullet body
+identifiers to class indices.
+</p>
+
+<p>
+The camera module uses PyBullet's built-in renderer to capture a 640 × 480 pixel RGB image
+and a floating-point depth buffer from the robot's forward-facing viewpoint. A separate
+semantic rendering pass produces a per-pixel class label map at zero additional physics
+cost, which is used as ground truth for the image segmentation auxiliary loss in VirConvNet.
+</p>
+
+<p>
+The projection from the LiDAR sensor frame to the camera image plane follows the standard
+pinhole model. The sensor frame is defined with +x forward, +y left, and +z up; the camera
+frame uses OpenCV convention (+x right, +y down, +z forward). The coordinate mapping is:
+</p>
+<p style="text-align:center;">
+  c<sub>x</sub> = −l<sub>y</sub>, &nbsp;&nbsp;
+  c<sub>y</sub> = −l<sub>z</sub>, &nbsp;&nbsp;
+  c<sub>z</sub> = l<sub>x</sub>
+</p>
+<p>
+and the pixel projection equations are:
+</p>
+<p style="text-align:center;">
+  u = f<sub>x</sub> · c<sub>x</sub> / c<sub>z</sub> + c<sub>x,0</sub>
+    = 240 · (−l<sub>y</sub>) / l<sub>x</sub> + 320
+</p>
+<p style="text-align:center;">
+  v = f<sub>y</sub> · c<sub>y</sub> / c<sub>z</sub> + c<sub>y,0</sub>
+    = 240 · (−l<sub>z</sub>) / l<sub>x</sub> + 240
+</p>
+<p>
+where f<sub>x</sub> = f<sub>y</sub> = 240.0 px are derived from the simulation's 90° vertical
+field of view and 480 px image height (f = H / (2 tan(45°)) = 240), and
+(c<sub>x,0</sub>, c<sub>y,0</sub>) = (320, 240) is the principal point at the image centre.
+A point is considered visible if c<sub>z</sub> &gt; 0.1 m and (u, v) lies within the
+640 × 480 pixel frame. These equations are the inverse of the virtual-point back-projection
+used in the Training subsystem, described in Section 4.5.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.4 – Perception pipeline: raw ray-cast → point cloud with labels → dataset persistence]
+</div>
+
+<h2>4.4 &nbsp; Navigation Subsystem</h2>
+
+<p>
+The Navigation subsystem is responsible for moving the robot autonomously through the
+warehouse while reacting to dynamic obstacles detected by the Perception subsystem. It
+consists of three components: a path planner, a path-following controller, and an
+obstacle-avoidance module.
+</p>
+
+<p>
+The path planner implements the Hybrid A* algorithm, which searches a three-dimensional
+state space (x, y, θ) and produces paths that are kinematically feasible for a
+differential-drive robot with a minimum turning radius. A set of motion primitives — seven
+forward-arc manoeuvres at varying curvatures plus two in-place pivot turns — is used to
+expand the search frontier. The configuration space is pre-computed by inflating all
+static obstacle cells by the robot radius (0.3 m), so collision checks reduce to a single
+grid lookup per primitive.
+</p>
+
+<p>
+Path following is handled by a Pure Pursuit–inspired controller that minimises both the
+heading error (angle between the robot's current orientation and the direction to the next
+waypoint) and the cross-track error (signed lateral distance from the current path segment).
+The control law is:
+</p>
+<p style="text-align:center;">
+  ω = K<sub>heading</sub> · e<sub>heading</sub> + K<sub>CTE</sub> · e<sub>CTE</sub>
+</p>
+<p>
+where K<sub>heading</sub> = 3.0 rad/s/rad and K<sub>CTE</sub> = 1.5 rad/s/m. Linear speed is
+tapered to zero as the robot approaches the goal.
+</p>
+
+<p>
+The obstacle-avoidance module monitors the LiDAR point cloud at 10 Hz and checks whether
+any newly detected obstacle cell intersects the current planned path. If a collision is
+forecast, it launches an asynchronous replanning thread so that the robot continues moving
+on the current path while a new route is computed in the background.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.5 – Navigation subsystem workflow: goal selection → Hybrid A* plan → Pure Pursuit → obstacle check → async replan]
+</div>
+
+<h2>4.5 &nbsp; Training Subsystem</h2>
+
+<p>
+The Training subsystem implements a full offline training pipeline for VirConvNet, a
+multimodal 3-D semantic segmentation model that fuses sparse LiDAR point clouds with
+dense camera features. The subsystem is self-contained: given the dataset collected by the
+Perception subsystem it handles data loading, data augmentation, model construction,
+mixed-precision training, and per-epoch validation with per-class IoU metrics.
+</p>
+
+<p>
+VirConvNet operates in the Bird's Eye View (BEV) representation. The key preprocessing
+step — virtual point generation — projects LiDAR points onto the image plane, identifies
+foreground image pixels that lack a corresponding depth return (occluded foreground), and
+back-projects those pixels into 3-D space using nearby LiDAR geometry, synthesising
+additional "virtual" points that carry 32-dimensional CNN image features. The enriched
+point set is then pillarised: the scene volume is discretised into 0.25 × 0.25 m vertical
+pillars; per-pillar features are aggregated by max-pooling; and a convolutional backbone
+predicts a per-pillar semantic label.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 4.6 – VirConvNet architecture: ImageBackbone → VirPillarFeatureNet → BEVBackbone → Segmentation head]<br>
+  Input: LiDAR scan (.npy) + RGB image (.png) → Output: per-pillar class labels (4 classes)
+</div>
+
+<p>
+Because only VirConvNet was trained and evaluated on the collected dataset in this thesis,
+the subsystem is described exclusively in terms of that model. The dataset contains paired
+LiDAR scans and camera frames captured at 10 Hz across multiple autonomous traversals of
+the warehouse, split 80 % for training and 20 % for validation.
+</p>
+
+<p>
+<strong>Virtual point back-projection.</strong> Given a foreground image pixel at (u, v)
+whose estimated depth is d (borrowed from the nearest occupied LiDAR depth cell), the
+corresponding 3-D point in the sensor frame is:
+</p>
+<p style="text-align:center;">
+  c<sub>x</sub> = (u − c<sub>x,0</sub>) · d / f<sub>x</sub>, &nbsp;&nbsp;
+  c<sub>y</sub> = (v − c<sub>y,0</sub>) · d / f<sub>y</sub>
+</p>
+<p style="text-align:center;">
+  l<sub>x</sub> = d, &nbsp;&nbsp;
+  l<sub>y</sub> = −c<sub>x</sub>, &nbsp;&nbsp;
+  l<sub>z</sub> = −c<sub>y</sub>
+</p>
+
+<p>
+<strong>Per-point pillar feature vector.</strong> For a point p<sub>i</sub> = (x, y, z, r)
+belonging to pillar P<sub>j</sub> with centroid μ = (μ<sub>x</sub>, μ<sub>y</sub>, μ<sub>z</sub>)
+and centre (x<sub>P</sub>, y<sub>P</sub>), the 42-dimensional feature vector is:
+</p>
+<p style="text-align:center;">
+  <strong>f</strong><sub>i</sub> =
+  [x, y, z, r &nbsp;|&nbsp;
+   x−μ<sub>x</sub>, y−μ<sub>y</sub>, z−μ<sub>z</sub> &nbsp;|&nbsp;
+   x<sub>P</sub>, y<sub>P</sub> &nbsp;|&nbsp;
+   φ<sub>i</sub><sup>(1..32)</sup> &nbsp;|&nbsp;
+   v<sub>i</sub>]
+</p>
+<p>
+where φ<sub>i</sub> ∈ ℝ<sup>32</sup> is the bilinearly-sampled image feature vector and
+v<sub>i</sub> ∈ {0, 1} is the virtual-point flag (1 for back-projected points, 0 for real
+LiDAR returns).
+</p>
+
+<p>
+<strong>Combined training loss.</strong> The total loss is a weighted sum of the primary
+3-D segmentation loss (computed on real LiDAR points) and an auxiliary 2-D image
+segmentation loss (computed on the ImageBackbone feature map at 1/4 resolution):
+</p>
+<p style="text-align:center;">
+  ℒ = ℒ<sub>CE</sub>(ŷ<sub>3D</sub>, y<sub>real</sub>) + α · ℒ<sub>CE</sub>(ŷ<sub>2D</sub>, y<sub>mask</sub>)
+</p>
+<p>
+where α = 0.5 is the auxiliary loss weight and ℒ<sub>CE</sub> denotes
+cross-entropy loss. The auxiliary head is necessary because the numpy-based
+pillarization step breaks the PyTorch autograd graph between the ImageBackbone and the
+primary 3-D loss, so without it the ImageBackbone would receive no gradient update.
+</p>
+
+<p>
+<strong>Class-frequency inverse weighting.</strong> To counter class imbalance,
+each class c is assigned weight:
+</p>
+<p style="text-align:center;">
+  w<sub>c</sub> = (1/f<sub>c</sub>) / Σ<sub>k</sub>(1/f<sub>k</sub>) · C
+</p>
+<p>
+where f<sub>c</sub> is the fraction of training points belonging to class c and C = 4 is
+the number of classes. The weights are passed to <code>CrossEntropyLoss(weight=...)</code>.
+</p>
+
+<p>
+<strong>Evaluation metric.</strong> Model quality is reported as the mean Intersection over
+Union (mIoU) across all classes:
+</p>
+<p style="text-align:center;">
+  IoU<sub>c</sub> = TP<sub>c</sub> / (TP<sub>c</sub> + FP<sub>c</sub> + FN<sub>c</sub>)
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  mIoU = (1/C) · Σ<sub>c</sub> IoU<sub>c</sub>
+</p>
+<p>
+Classes with no ground-truth points in the validation split (denominator = 0) are excluded
+from the mIoU average.
+</p>
+
+
+<!-- ============================================================ -->
+<h1>5 &nbsp; IMPLEMENTATION DETAILS</h1>
+<!-- ============================================================ -->
+
+<h2>5.1 &nbsp; Environment Simulation Module</h2>
+
+<h3>5.1.1 &nbsp; Environment Assets and Placement</h3>
+
+<p>
+The warehouse world is constructed programmatically in <code>simulation/world.py</code> using
+only PyBullet primitive shapes and external URDF/OBJ meshes — there is no external scene
+description file. This choice was made deliberately so that the environment could be
+regenerated deterministically from a single configuration parameter set, making experiment
+reproducibility straightforward.
+</p>
+
+<p>
+The floor, ceiling, and four perimeter walls are box primitives. Interior dividing walls
+separate the three shelf columns from the driving corridors. Shelf units are loaded from a
+custom OBJ mesh with a concave collision shape, which was necessary because the default
+convex hull approximation caused the LiDAR to treat each shelf unit as a solid rectangular
+block, masking the internal structure that real robots would see. Switching to
+<code>GEOM_FORCE_CONCAVE_TRIMESH</code> resolved this at the cost of a longer loading time;
+since the environment is static, this overhead is paid only once at startup.
+</p>
+
+<p>
+Table 5.1 summarises the spatial layout of the key environment elements.
+</p>
+
+<table>
+  <tr><th>Element</th><th>Count</th><th>Position(s) (x, y) [m]</th><th>Notes</th></tr>
+  <tr><td>Shelf units</td><td>6</td><td>(−8, ±7), (0, ±7), (+8, ±7)</td><td>Concave mesh collision</td></tr>
+  <tr><td>Forklift</td><td>1</td><td>(+10, +11)</td><td>Concave mesh, static</td></tr>
+  <tr><td>Dynamic crates</td><td>0–N</td><td>Runtime placement</td><td>0.5 m cube, box collision</td></tr>
+  <tr><td>Perimeter walls</td><td>4</td><td>±14 m (x), ±15 m (y)</td><td>Box primitives</td></tr>
+</table>
+
+<p>
+Obstacle inflation for path planning is performed once during world construction:
+every grid cell whose centre falls within ROBOT_RADIUS (0.3 m) of any static obstacle
+surface is marked as occupied. Dynamic crates update a separate obstacle set so that the
+static inflation does not need to be recomputed when a crate is placed or removed.
+</p>
+
+<p>
+<strong>Implementation difficulty — concave mesh collision on Windows.</strong>
+PyBullet's concave collision shapes require the mesh to be a closed, manifold surface.
+Several of the initial OBJ assets had degenerate faces or open edges, which caused PyBullet
+to silently fall back to a convex hull without emitting a warning. The issue was identified
+by comparing BEV point clouds between simulation runs and noticing that certain shelf
+channels were never penetrated by LiDAR rays. The fix involved cleaning the meshes in
+Blender (Remove Doubles, Recalculate Normals) before re-exporting.
+</p>
+
+<h3>5.1.2 &nbsp; Robot Simulation</h3>
+
+<p>
+The robot is defined programmatically in <code>simulation/robot.py</code>. A base link and
+two wheel joints are created using <code>createMultiBody()</code>; no URDF file is used.
+The differential-drive kinematic model converts the commanded linear and angular velocities
+into individual left and right wheel speeds:
+</p>
+<p style="text-align:center;">
+  v<sub>L</sub> = v − ω · L / 2, &nbsp;&nbsp; v<sub>R</sub> = v + ω · L / 2
+</p>
+<p>
+where L = 0.5 m is the axle width. These are applied via
+<code>setJointMotorControl2(VELOCITY_CONTROL)</code>. The robot's pose is read back from
+PyBullet each step using <code>getBasePositionAndOrientation()</code>, which provides the
+oracle localisation used by the navigation module.
+</p>
+
+<p>
+The maximum linear speed is capped at 1.5 m/s and the maximum angular speed at 3.0 rad/s
+in the controller before the commands reach the physics engine, preventing the robot from
+spinning faster than the LiDAR can update its obstacle model.
+</p>
+
+<h2>5.2 &nbsp; Perception Module</h2>
+
+<h3>5.2.1 &nbsp; LiDAR Sensor Simulation</h3>
+
+<p>
+The simulated LiDAR is implemented in <code>perception/lidar.py</code>. The VLP-16 angular
+pattern is pre-computed at module load time: 360 azimuth angles uniformly spaced over
+[0°, 360°) are combined with 16 fixed elevation angles in [−15°, +15°] to produce 5 760
+(direction, origin) ray pairs in sensor-local coordinates. These are rotated into world
+coordinates each frame using the robot's current pose (position + quaternion from PyBullet).
+</p>
+
+<p>
+All 5 760 rays are submitted as a single batch to <code>rayTestBatch(numThreads=4)</code>,
+which distributes the workload across four CPU threads inside the PyBullet C++ engine.
+Each returned hit record contains the body ID and link ID of the struck object, the hit
+position in world coordinates, and the surface normal. The hit position, together with the
+robot pose, is used to compute the point in sensor-local [x, y, z] coordinates and a
+pseudo-intensity value derived from the cosine of the incidence angle.
+</p>
+
+<p>
+Semantic labels are assigned by looking up the body ID in a dictionary populated during
+world construction:
+</p>
+
+<pre>
+# perception/lidar.py – semantic label assignment (simplified)
+label_map = {
+    shelf_body_id:    1,   # shelf
+    crate_body_id:    2,   # crate  (updated when crates are spawned/removed)
+    forklift_body_id: 3,   # forklift
+}
+
+def _label_for_hit(body_id):
+    return label_map.get(body_id, 0)  # default: background
+</pre>
+
+<p>
+The result of one scan is stored as two aligned NumPy arrays: <code>points</code> of shape
+(N, 4) in float32 (x, y, z, intensity) and <code>labels</code> of shape (N,) in int32.
+Rays that do not hit any object are excluded from both arrays, so N ≤ 5 760.
+</p>
+
+<p>
+<strong>Implementation difficulty — label drift when crates are added mid-run.</strong>
+PyBullet assigns body IDs sequentially at creation time, so crates spawned after the
+label map was initialised were assigned IDs not present in the map and defaulted to label 0
+(background), making them invisible to the perception model. The fix was to update the
+<code>label_map</code> inside the crate-spawning callback, ensuring every newly created
+body ID is registered before the next LiDAR scan is issued.
+</p>
+
+<p>
+A real-time visualisation window (built with OpenCV) displays three panels: a 360×16
+range image colour-coded by distance, a bird's-eye view with 5 m concentric range rings
+and the robot's position, and — when camera collection is active — the RGB frame and the
+per-pixel segmentation mask. This window was indispensable during debugging, as it made
+label errors visible immediately without needing to post-process saved files.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 5.1 – Screenshot of the real-time LiDAR visualisation window: range image (top-left), BEV (top-right), RGB camera (bottom-left), segmentation mask (bottom-right)]
+</div>
+
+<h3>5.2.2 &nbsp; Camera Module Simulation</h3>
+
+<p>
+The camera is implemented in <code>perception/vision.py</code> and
+<code>perception/image_collector.py</code>. PyBullet's <code>getCameraImage()</code> function
+is called with a view matrix computed from the robot's current pose and a fixed forward
+direction. The projection matrix uses a 60° vertical field of view, a 640/480 aspect ratio,
+and near/far clipping planes at 0.1 m and 20 m respectively.
+</p>
+
+<p>
+The function returns four buffers: an 8-bit RGB image, a 32-bit floating-point depth
+buffer (in OpenGL's non-linear normalised device coordinates), a per-pixel object-ID
+segmentation map, and a per-pixel link-ID map. The depth buffer is linearised to metric
+distances using the standard OpenGL inverse projection formula:
+</p>
+<p style="text-align:center;">
+  d<sub>metric</sub> = f · n / (f − (f − n) · d<sub>ndc</sub>)
+</p>
+<p>
+where n = 0.1 m (near) and f = 20.0 m (far). This linearised depth is used by the
+obstacle localiser and by VirConvNet's virtual point generation step.
+</p>
+
+<p>
+The per-pixel object-ID map produced by PyBullet's segmentation renderer uses the same
+body IDs as the LiDAR label map, so the same lookup dictionary assigns class labels to
+pixels with zero additional cost — a deliberate design choice that kept the two sensor
+pipelines consistent.
+</p>
+
+<h3>5.2.3 &nbsp; Dataset Collection Module</h3>
+
+<p>
+Dataset collection is coordinated by the main loop in <code>main.py</code>. When collection
+is enabled (controlled by a flag in <code>config.py</code>), every LiDAR scan is paired with
+a synchronous camera capture: both are triggered from the same simulation step so that the
+point cloud and image share an identical robot pose. The pairing is enforced by design
+rather than by timestamp correlation, eliminating any risk of temporal misalignment.
+</p>
+
+<p>
+Files are written to <code>training_data/lidar/</code> and <code>training_data/images/</code>
+using a shared global frame counter as the filename stem:
+</p>
+
+<pre>
+training_data/
+  lidar/
+    train/  frame_000000.npy  frame_000001.npy  ...
+    val/    frame_000120.npy  ...
+  images/
+    train/  frame_000000.png  frame_000001.png  ...
+    val/    frame_000120.png  ...
+</pre>
+
+<p>
+The 80/20 train/validation split is decided at collection time using a deterministic
+modulo rule (<code>frame_id % 5 == 0</code> → validation), so the split is reproducible
+without storing a separate index file. Each LiDAR file is a compressed NumPy archive
+storing both the point array and the label array; each image file is a lossless PNG storing
+the RGB frame together with a side-channel PNG for the semantic label mask.
+</p>
+
+<p>
+<strong>Implementation difficulty — DataLoader deadlock on Colab.</strong>
+When the training script was ported to Google Colab for GPU execution, PyTorch's
+<code>DataLoader</code> with <code>num_workers &gt; 0</code> caused a deadlock on startup.
+The root cause is Colab's forked-process model combined with the CUDA context already
+initialised by the parent process. The fix was to set <code>num_workers=0</code> on Colab,
+making data loading synchronous. Because each LiDAR scan is only ~100 KB, the I/O overhead
+of single-threaded loading was negligible compared to the GPU compute time.
+</p>
+
+<h2>5.3 &nbsp; Navigation Module</h2>
+
+<h3>5.3.1 &nbsp; Controller</h3>
+
+<p>
+The path-following controller is implemented in <code>navigation/controller.py</code> as the
+<code>PurePursuitController</code> class. Given the current robot pose (x, y, θ) and a
+sequence of waypoints produced by the planner, the controller computes a steering command
+ω and a forward speed v each physics step.
+</p>
+
+<p>
+Waypoint advancement uses a parametric progress variable t along each path segment.
+When t ≥ 1.0 for the current segment, the controller advances to the next one. This is
+more numerically robust than proximity-based advancement (which can skip short segments
+on a fast robot or loop on a slow one) because it depends on the signed projection of the
+robot's position onto the segment direction, which is always well-defined.
+</p>
+
+<p>
+The steering law combines heading error and cross-track error:
+</p>
+
+<pre>
+# navigation/controller.py – steering law
+dx = target.x - robot.x;  dy = target.y - robot.y
+e_heading = normalize_angle(atan2(dy, dx) - robot.theta)
+
+# signed lateral distance from the current segment line
+e_cte = cross_product(segment_dir, robot_pos - segment_start)
+
+omega = K_HEADING * e_heading + K_CTE * e_cte
+omega = clip(omega, -MAX_STEER, +MAX_STEER)
+</pre>
+
+<p>
+Linear speed is tapered from MAX_SPEED (1.5 m/s) to 0 linearly within LOOKAHEAD_DISTANCE
+(2.0 m) of the final goal, so the robot decelerates smoothly rather than stopping abruptly.
+</p>
+
+<p>
+When a replanned path is spliced in mid-execution via <code>set_path_near()</code>, the
+controller finds the segment on the new path closest to the robot's current position and
+starts tracking from there, avoiding the backward lunge that occurred in an earlier version
+when the new path was always tracked from its beginning.
+</p>
+
+<h3>5.3.2 &nbsp; Hybrid A* Planner</h3>
+
+<p>
+The Hybrid A* planner is implemented in <code>navigation/planner.py</code> as the
+<code>HybridAStarPlanner</code> class. It searches a discretised 3-D configuration space
+(x, y, θ) where x and y are quantised to 0.5 m grid cells and θ is quantised into 16
+uniform heading bins of 22.5° each. The total state space for the 28 × 30 m warehouse
+is 56 × 60 × 16 = 53 760 states.
+</p>
+
+<p>
+<strong>Motion primitives.</strong> From each state, 9 successors are generated using
+pre-computed motion primitives:
+</p>
+<ul>
+  <li>7 forward-arc primitives at steering angles {−3, −2, −1, 0, +1, +2, +3} × δ<sub>max</sub>/3,
+      where δ<sub>max</sub> = 3.0 rad corresponds to the minimum turning radius at
+      v = MAX_SPEED.</li>
+  <li>2 pivot-turn primitives (v = 0, ω = ±MAX_STEER) that rotate the robot in place by one
+      heading bin. These are essential for escaping heading deadlocks in narrow corridors
+      where no forward arc leads to a reachable cell.</li>
+</ul>
+
+<p>
+The pseudocode for the main search loop is:
+</p>
+
+<pre>
+function HybridAStar(start, goal):
+    OPEN  ← priority queue ordered by f = g + h
+    CLOSED ← set of visited discrete states
+    push(OPEN, start, f=h(start))
+
+    while OPEN is not empty:
+        node ← pop_min(OPEN)
+        if discrete(node) in CLOSED: continue
+        CLOSED.add(discrete(node))
+
+        if distance(node, goal) &lt; GOAL_TOLERANCE:
+            return reconstruct_path(node)
+
+        for each primitive p in PRIMITIVES:
+            child ← apply(node, p)
+            if collides(child) or discrete(child) in CLOSED:
+                continue
+            child.g = node.g + arc_length(p)
+            child.h = euclidean(child, goal)
+            push(OPEN, child, f = child.g + child.h)
+
+    return FAILURE   # goal unreachable
+</pre>
+
+<p>
+Collision checking calls <code>is_obstacle(grid_x, grid_y)</code>, a single array lookup
+into the pre-inflated occupancy grid. Because the grid is stored as a NumPy boolean array,
+the lookup is O(1) and cache-friendly.
+</p>
+
+<p>
+<strong>Dynamic obstacle management.</strong> The static obstacle grid is computed once
+during world construction. Dynamic crates are tracked in a separate Python set
+<code>dynamic_obstacle_cells</code>. Collision checking is the logical OR of the two:
+<code>static_grid[x, y] or (x, y) in dynamic_obstacle_cells</code>. This avoids
+re-inflating the full static grid whenever a crate moves, which would be prohibitively slow.
+</p>
+
+<p>
+<strong>Implementation difficulty — heading oscillation in long straight corridors.</strong>
+Early testing revealed that the planner sometimes produced paths that zigzagged between
+adjacent heading bins in straight sections because the heuristic (Euclidean distance) did
+not penalise heading changes. Adding a small heading-alignment bonus — reducing the
+heuristic by a constant when the child heading is within one bin of the goal heading —
+eliminated the zigzag without significantly increasing search time.
+</p>
+
+<div class="diagram-placeholder">
+  [Figure 5.2 – Example Hybrid A* path in the warehouse: start (south corridor) → goal (north corridor), showing arc primitives and heading bins]
+</div>
+
+<h3>5.3.3 &nbsp; Obstacle Avoidance Module</h3>
+
+<p>
+The obstacle avoidance module is distributed across <code>main.py</code> and
+<code>navigation/replanner.py</code>. Every 24 physics steps (once per LiDAR scan at 10 Hz),
+the main loop inspects the point cloud for newly occupied grid cells and calls
+<code>planner.path_is_blocked(current_path)</code> to test whether any of those cells
+intersect the planned trajectory within a look-ahead horizon of 3.0 m.
+</p>
+
+<p>
+If the path is blocked, a background thread is launched to call <code>replan_to_goal()</code>.
+The main loop continues executing the old path until either the thread returns a new path
+or the robot reaches the blocked cell, at which point it stops and waits. This two-phase
+strategy keeps the robot moving in the common case where the obstacle is far enough ahead
+that replanning completes before the robot arrives. If the direct replan also fails (goal
+unreachable), the replanner attempts a two-leg detour: it generates a perpendicular offset
+point away from the obstacle and plans a path through that intermediate waypoint.
+</p>
+
+<p>
+When a crate is detected as removed (its LiDAR footprint disappears from the point cloud),
+<code>remove_dynamic_obstacles()</code> is called to clear the corresponding cells, keeping
+the obstacle model consistent with the current scene.
+</p>
+
+<h2>5.4 &nbsp; VirConvNet Implementation</h2>
+
+<p>
+VirConvNet was implemented and trained using a Jupyter notebook,
+<code>virconvnet_seg.ipynb</code>, executed on Google Colab with a T4 GPU. The dataset
+was stored on Google Drive and mounted at <code>/content/drive/MyDrive/training_data/</code>.
+A derivative script <code>virconvnet_train.py</code> was later adapted from the notebook
+for optional local execution, adding command-line argument parsing and Automatic Mixed
+Precision (AMP) support. All results reported in this thesis originate from the
+notebook-based Colab run.
+</p>
+
+<p>
+The notebook is structured into 13 numbered cells, each with a clearly delimited
+responsibility, summarised in Table 5.4.
+</p>
+
+<table>
+  <tr><th>Cell</th><th>Title</th><th>Responsibility</th></tr>
+  <tr><td>1</td><td>Setup</td><td>Mount Google Drive; install scipy and OpenCV headless</td></tr>
+  <tr><td>2</td><td>Imports &amp; Config</td><td>All hyperparameters in a single <code>Config</code> class</td></tr>
+  <tr><td>3</td><td>MultimodalDataset</td><td>Paired LiDAR + image loader, ±30° yaw augmentation</td></tr>
+  <tr><td>4</td><td>Camera projection</td><td><code>lidar_to_image()</code> and bilinear feature sampler</td></tr>
+  <tr><td>5</td><td>ImageBackbone</td><td>Lightweight CNN: (B, 3, 480, 640) → (B, 32, 120, 160)</td></tr>
+  <tr><td>6</td><td>Virtual point generation</td><td><code>generate_virtual_points()</code> with stochastic dropout</td></tr>
+  <tr><td>7</td><td>Pillarization</td><td><code>augment_and_pillarize()</code>: builds the 42-d feature tensor</td></tr>
+  <tr><td>8</td><td>VirConvNetSeg model</td><td>PFN → BEVBackbone → segmentation head + auxiliary head</td></tr>
+  <tr><td>9</td><td>Loss &amp; metrics</td><td>Class weight estimation, per-class IoU, confusion matrix</td></tr>
+  <tr><td>10</td><td>Train/eval functions</td><td><code>train_epoch()</code>, <code>evaluate()</code>, <code>evaluate_by_distance()</code></td></tr>
+  <tr><td>11</td><td>Training loop</td><td>60-epoch loop with checkpoint saving; console mIoU reporting</td></tr>
+  <tr><td>12</td><td>Evaluation &amp; visualisation</td><td>Training curves, confusion matrix, BEV scatter plot, camera overlay</td></tr>
+  <tr><td>13</td><td>Ablation study</td><td>Three variants: LiDAR-only, LiDAR+image, Full VirConvNet</td></tr>
+</table>
+
+<p>
+<strong>Virtual point generation (Cell 6).</strong> This is the most novel component and
+the primary contribution of VirConvNet. The algorithm is detailed below with the actual
+implementation logic:
+</p>
+
+<pre>
+# virconvnet_seg.ipynb – Cell 6 (condensed)
+def generate_virtual_points(pts, mask_np, feat_map_np, training=False):
+    # 1. Project real LiDAR → sparse depth buffer at 1/4 image resolution
+    u_img, v_img, depth, valid = lidar_to_image(pts)
+    depth_buf = np.zeros((fH, fW), np.float32)
+    for ui, vi, d in zip(u_f[valid], v_f[valid], depth[valid]):
+        if depth_buf[vi, ui] == 0 or d &lt; depth_buf[vi, ui]:
+            depth_buf[vi, ui] = d     # keep nearest depth per cell
+
+    # 2. Foreground pixels at feature-map resolution with no LiDAR coverage
+    msk_small = mask_np[::4, ::4]     # nearest-neighbour downsample
+    fg_mask   = (msk_small &gt; 0) &amp; (depth_buf == 0)
+    fg_rows, fg_cols = np.where(fg_mask)
+
+    # 3. Nearest occupied depth cell via cKDTree (workers=1 — Colab safety)
+    tree = cKDTree(np.stack([occ_rows, occ_cols], axis=1))
+    dists, idxs = tree.query(np.stack([fg_rows, fg_cols], axis=1),
+                              k=1, workers=1)
+    near      = dists &lt;= MAX_DEPTH_SEARCH_PX   # 12 feature pixels ≈ 48 img px
+    ref_depth = depth_buf[occ_rows[idxs[near]], occ_cols[idxs[near]]]
+
+    # 4. Subsample and stochastic dropout (VirConvNet §3.2)
+    if len(fg_rows) &gt; MAX_VIRTUAL_PTS:          # 1500 cap
+        sel = np.random.choice(len(fg_rows), MAX_VIRTUAL_PTS, replace=False)
+    if training:
+        keep = np.random.rand(len(fg_rows)) &gt; VIRTUAL_DROPOUT  # 0.3
+
+    # 5. Back-project to sensor frame (see Section 4.5 for formula)
+    u_virt = fg_cols * 4 + 1.5;  v_virt = fg_rows * 4 + 1.5
+    cam_z  = ref_depth
+    lx_v   = cam_z;              ly_v = -(u_virt - CX) * cam_z / FX
+    lz_v   = -(v_virt - CY) * cam_z / FY
+
+    # 6. Sample 32-D image features at virtual pixel locations
+    virt_feat = sample_feat_at_pixels(feat_map_np, fg_cols*4+1.5, fg_rows*4+1.5)
+    return virt_pts, virt_feat
+</pre>
+
+<p>
+<strong>Model architecture (Cell 8).</strong> The network consists of four stages:
+</p>
+<ol>
+  <li><strong>ImageBackbone</strong>: two stride-2 Conv2d blocks reduce 640 × 480 RGB to a
+      32-channel feature map at 160 × 120. Features are bilinearly sampled at each projected
+      LiDAR pixel and at each virtual pixel location.</li>
+  <li><strong>VirPillarFeatureNet (PFN)</strong>: a shared Linear(42 → 64) + BatchNorm1d +
+      ReLU applied per point, followed by a per-pillar max-pool, yielding one 64-D descriptor
+      per pillar. This is the PointNet-style set aggregation from PointPillars.</li>
+  <li><strong>BEVBackbone</strong>: three convolutional blocks at full, 1/2, and 1/4 BEV
+      resolution (64→64, 64→128, 128→256 channels), with transposed convolutions to upsample
+      the two downsampled scales back to full resolution, then concatenated to give a
+      (64 + 128 + 128) = 320-channel BEV feature map.</li>
+  <li><strong>Segmentation head</strong>: Conv2d(320 → 128 → 4) with Dropout2d(0.1), producing
+      per-pillar class logits. Point-level predictions are indexed from the BEV logit map
+      using each point's pillar (x, y) coordinate.</li>
+</ol>
+
+<p>
+The <strong>auxiliary head</strong> is a single Conv2d(32 → 4) applied to the ImageBackbone
+output. It provides pixel-level supervision at 120 × 160 resolution and is the only gradient
+path reaching the image branch, because the numpy pillarization step detaches the PyTorch
+computation graph from the primary 3-D loss.
+</p>
+
+<pre>
+# virconvnet_seg.ipynb – Cell 8 (forward pass summary)
+class VirConvNetSeg(nn.Module):
+    def encode_images(self, imgs):       # GPU; keeps grad for aux_head
+        return self.img_bb(imgs)
+
+    def forward_aux(self, feat_map):     # auxiliary 2-D supervision
+        return self.aux_head(feat_map)   # (B, 4, 120, 160)
+
+    def forward_pillars(self, pillars, coords, n_pil):
+        pf  = self.pfn(pillars)          # per-pillar 64-D descriptors
+        bev = scatter(pf, coords)        # (B, 64, 160, 160) BEV canvas
+        return self.head(self.backbone(bev))   # (B, 4, 160, 160)
+</pre>
+
+<p>
+<strong>Training loop (Cells 10–11).</strong> One training step proceeds as:
+(i) encode the RGB batch on GPU with gradient enabled;
+(ii) compute the auxiliary 2-D loss immediately;
+(iii) detach the feature maps and run numpy-based pillarization on CPU;
+(iv) scatter pillars onto the BEV canvas, run the 3-D forward pass, compute the primary loss;
+(v) backpropagate the combined loss L = L<sub>3D</sub> + 0.5 · L<sub>2D</sub> and clip
+gradients to norm 35.0.
+</p>
+
+<table>
+  <tr><th>Hyperparameter</th><th>Value</th><th>Notes</th></tr>
+  <tr><td>Optimiser</td><td>Adam</td><td>β₁=0.9, β₂=0.999, weight decay=1×10⁻⁴</td></tr>
+  <tr><td>Learning rate</td><td>1 × 10⁻³</td><td>MultiStepLR ×0.1 at epochs 30 and 50</td></tr>
+  <tr><td>Batch size</td><td>2</td><td>Colab T4 with 16 GB VRAM</td></tr>
+  <tr><td>Total epochs</td><td>60</td><td>Validated every 5 epochs</td></tr>
+  <tr><td>Augmentation</td><td>±30° yaw rotation</td><td>Applied to LiDAR only; image unchanged</td></tr>
+  <tr><td>Max virtual points</td><td>1 500 / scan</td><td>Random sub-sample when candidate set larger</td></tr>
+  <tr><td>Virtual dropout</td><td>30 %</td><td>Applied only during training (Stochastic VD)</td></tr>
+  <tr><td>DataLoader workers</td><td>0</td><td>Required on Colab; see difficulty below</td></tr>
+</table>
+
+<p>
+<strong>Evaluation (Cell 12).</strong> After training, the best checkpoint is evaluated with
+four reporting views: (a) training loss and per-class IoU curves over epochs; (b) a
+row-normalised confusion matrix; (c) a per-class IoU breakdown by forward distance
+(0–5 m, 5–10 m, 10–20 m, 20–40 m), testing the hypothesis that virtual points aid
+detection at longer ranges where LiDAR is sparser; (d) qualitative BEV scatter plots and
+LiDAR predictions projected back onto the camera image.
+</p>
+
+<p>
+<strong>Ablation study (Cell 13).</strong> To quantify the contribution of each modality,
+three model variants were trained for 30 epochs and evaluated on the validation split:
+</p>
+<table>
+  <tr><th>Variant</th><th>Image features</th><th>Virtual points</th></tr>
+  <tr><td>A — LiDAR-only</td><td>Zeroed out</td><td>Disabled (MAX_VIRTUAL_PTS = 0)</td></tr>
+  <tr><td>B — LiDAR + image</td><td>Enabled</td><td>Disabled</td></tr>
+  <tr><td>C — Full VirConvNet</td><td>Enabled</td><td>Enabled</td></tr>
+</table>
+<p>
+The mIoU delta between Variant B and Variant C isolates the contribution of virtual point
+synthesis; the delta between Variant A and B isolates the contribution of image feature
+augmentation on real LiDAR points.
+</p>
+
+<p>
+<strong>Implementation difficulty 1 — DataLoader and cKDTree worker deadlock on Colab.</strong>
+Both <code>DataLoader(num_workers &gt; 0)</code> and <code>cKDTree.query(workers &gt; 1)</code>
+launch forked sub-processes. When CUDA is already initialised in the parent process (which
+happens as soon as the model is moved to GPU), forking corrupts the CUDA context in each
+child, causing a deadlock on startup with no informative error message. Both were fixed by
+setting <code>num_workers=0</code> in the DataLoader and <code>workers=1</code> in every
+<code>cKDTree.query()</code> call. Because LiDAR scans average only ~70 KB and the KD-tree
+candidate sets rarely exceed 1 500 points (capped by <code>MAX_VIRTUAL_PTS</code>), the
+performance impact was negligible.
+</p>
+
+<p>
+<strong>Implementation difficulty 2 — broken autograd path through numpy pillarization.</strong>
+The pillarization step converts PyTorch tensors to NumPy arrays, processes them with
+SciPy/NumPy routines, and returns new tensors. This breaks the autograd computation graph:
+gradients from the 3-D loss cannot flow back through the pillarizer to the ImageBackbone.
+As a result, the ImageBackbone would receive no gradient signal and would remain at its
+random initialisation. The solution was to add the auxiliary segmentation head (Cell 8,
+<code>forward_aux()</code>) which applies a 1×1 convolution directly to the ImageBackbone
+output — before detaching — and computes a pixel-wise cross-entropy loss at the feature-map
+resolution. This auxiliary loss provides the only gradient path that trains the image branch.
+</p>
+
+<p>
+<strong>Implementation difficulty 3 — class imbalance causing trivial convergence.</strong>
+In the first training run without class weighting, the model converged to predicting
+background for every point within 5 epochs, achieving ~85 % point accuracy due to the
+dominance of background returns in warehouse LiDAR scans. The model reported a misleadingly
+high accuracy while IoU for shelf, crate, and forklift were all 0. Introducing
+frequency-inverse class weights (Cell 9, <code>estimate_class_weights()</code>) and
+passing them to <code>CrossEntropyLoss</code> resolved the trivial convergence and the
+model began correctly predicting foreground classes within the first 10 epochs.
+</p>
+
+<h2>5.5 &nbsp; Other Relevant Modules</h2>
+
+<h3>5.5.1 &nbsp; Main</h3>
+
+<p>
+The simulation entry point <code>main.py</code> orchestrates all subsystems. Its main
+responsibilities are: initialising PyBullet and loading the world, selecting an initial
+random goal, running the 240 Hz physics loop, invoking the LiDAR sensor every 24 steps,
+launching asynchronous replanning threads when the path is blocked, and writing sensor
+data to disk when collection is enabled.
+</p>
+
+<p>
+An important robustness mechanism is the goal retry loop: if <code>pick_random_goal()</code>
+fails because all candidate positions are too close to an obstacle, the system waits for
+the robot to move slightly and tries again after a back-off interval, rather than crashing
+or selecting an unreachable goal. This situation arises when many dynamic crates are placed
+simultaneously, temporarily filling the available free space.
+</p>
+
+<p>
+Thread safety is enforced by a single <code>threading.Lock</code> that guards write access
+to the shared path variable. The physics loop holds the lock only while replacing the
+path reference (a pointer swap), not during path following, so lock contention is negligible.
+</p>
+
+<h3>5.5.2 &nbsp; Configuration File</h3>
+
+<p>
+All tuneable parameters are centralised in <code>config.py</code>. This was a deliberate
+early design decision: having a single place to change the robot radius, grid resolution,
+sensor rate, or training dataset path avoids the "magic number" problem where the same
+constant appears in multiple files with no indication of what it means or where it comes
+from. Table 5.3 lists the most significant parameters.
+</p>
+
+<table>
+  <tr><th>Parameter</th><th>Value</th><th>Effect</th></tr>
+  <tr><td>PLANNER</td><td>"hybrid_astar"</td><td>Selects the active path planner</td></tr>
+  <tr><td>SIM_FREQ</td><td>240 Hz</td><td>PyBullet physics step rate</td></tr>
+  <tr><td>LIDAR_INTERVAL</td><td>24 steps</td><td>LiDAR scan rate = SIM_FREQ / LIDAR_INTERVAL = 10 Hz</td></tr>
+  <tr><td>MAP_WIDTH / HEIGHT</td><td>28 m / 30 m</td><td>Warehouse floor dimensions</td></tr>
+  <tr><td>GRID_RESOLUTION</td><td>0.5 m</td><td>Path-planning grid cell size</td></tr>
+  <tr><td>ROBOT_RADIUS</td><td>0.3 m</td><td>C-space inflation margin</td></tr>
+  <tr><td>MAX_SPEED</td><td>1.5 m/s</td><td>Maximum linear velocity</td></tr>
+  <tr><td>MAX_STEER</td><td>3.0 rad/s</td><td>Maximum angular velocity</td></tr>
+  <tr><td>K_HEADING</td><td>3.0</td><td>Heading error gain</td></tr>
+  <tr><td>K_CTE</td><td>1.5</td><td>Cross-track error gain</td></tr>
+  <tr><td>LIDAR_H_RAYS</td><td>360</td><td>Horizontal ray count per scan</td></tr>
+  <tr><td>LIDAR_V_RAYS</td><td>16</td><td>Vertical channel count (VLP-16)</td></tr>
+  <tr><td>LIDAR_MAX_RANGE</td><td>20 m</td><td>Maximum detection range</td></tr>
+  <tr><td>COLLECT_DATA</td><td>True/False</td><td>Enables dataset persistence</td></tr>
+  <tr><td>TRAIN_VAL_SPLIT</td><td>0.8</td><td>Fraction of frames for training</td></tr>
+</table>
+
+<p>
+During development, centralising parameters in <code>config.py</code> significantly
+shortened the iteration cycle for tuning the controller gains and the planner resolution,
+since a single file edit and a process restart were sufficient to test a new configuration.
+</p>
+
+</body>
+</html>

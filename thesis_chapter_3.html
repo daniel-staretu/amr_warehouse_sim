@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thesis – Chapter 3: State of the Art</title>
+<style>
+  body {
+    font-family: "Times New Roman", serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 30px;
+    color: #111;
+  }
+  h1 { font-size: 16pt; text-transform: uppercase; margin-top: 40px; }
+  h2 { font-size: 14pt; margin-top: 32px; }
+  h3 { font-size: 12pt; margin-top: 24px; }
+  h4 { font-size: 12pt; margin-top: 18px; font-style: italic; }
+  p  { text-align: justify; margin: 8px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    font-size: 10.5pt;
+  }
+  th, td {
+    border: 1px solid #aaa;
+    padding: 5px 9px;
+    vertical-align: top;
+  }
+  th { background: #eee; text-align: left; }
+  caption {
+    caption-side: bottom;
+    font-style: italic;
+    font-size: 10pt;
+    padding: 4px 0;
+    text-align: left;
+  }
+  ul, ol { margin: 6px 0 6px 24px; }
+  li { margin: 3px 0; }
+  .bib { font-size: 10.5pt; line-height: 1.4; }
+  .bib p { margin: 4px 0; text-indent: -1.5em; padding-left: 1.5em; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<h1>3 &nbsp; STATE OF THE ART</h1>
+<!-- ============================================================ -->
+
+<!-- ============================================================ -->
+<h2>3.1 &nbsp; Definition and Use Cases of Autonomous Mobile Robotics</h2>
+<!-- ============================================================ -->
+
+<p>
+An Autonomous Mobile Robot (AMR) is a mechatronic system that can navigate independently
+and intelligently in an environment. This is done by using logic algorithms which are
+given sensorial information as an input. One of the first patents for an AMR was
+registered in 1987, under the designation of US4638445A [3]. Ever since then, the scope
+of their applications has expanded greatly. For example, these types of robots have found
+multiple uses in domains such as the military, space technology, and agriculture.
+In the military domain, Unmanned Ground Vehicles (UGVs) such as the iRobot PackBot have
+been deployed for reconnaissance and improvised explosive device detection in operational
+theatres, reducing the exposure of human personnel to life-threatening hazards [a]. In
+space exploration, the NASA Mars Science Laboratory rover Curiosity and its successor
+Perseverance operate as fully autonomous science platforms, relying on on-board hazard
+avoidance because the communication latency with Earth makes real-time teleoperation
+infeasible. In the agricultural sector, AMRs are used for precision herbicide spraying,
+selective fruit picking, and autonomous soil condition monitoring; commercial platforms
+from vendors such as Naïo Technologies and John Deere have demonstrated practical
+viability at production scale [a].
+</p>
+
+<p>
+Within the warehousing and industrial sector, AMRs have found applications such as
+goods-to-person shelf transport, autonomous pallet retrieval and stacking, inventory
+scanning, and cross-docking logistics between receiving and shipping areas. The Amazon
+Robotics platform, formerly Kiva Systems, pioneered the large-scale deployment of AMRs
+that autonomously lift and carry entire shelving units to stationary human pickers,
+substantially reducing per-order walking distances. Similar systems are now offered by
+vendors including AutoStore, Locus Robotics, and 6 River Systems, and autonomous
+forklift platforms capable of operating alongside human operators are increasingly
+deployed in distribution centres [a].
+</p>
+
+<p>
+The rapid advancement brought forth by Industry 4.0 has found an ever-increasing need
+for closer collaboration between humans and robots. This has led to the development of
+the collaborative robot (cobot) paradigm. Unlike traditional robotic systems, cobots are
+specifically designed for working directly with other humans on tasks. This means,
+however, that compliance with strict safety precautions is required. Standards such as
+ISO 10218-1/2 [b][c] and ISO/TS 15066 [d] are used to specify the safety requirements
+for cobots.
+</p>
+
+<!-- ============================================================ -->
+<h2>3.2 &nbsp; ADAS-Specific Object Recognition Techniques Based on LiDAR</h2>
+<!-- ============================================================ -->
+
+<p>
+Advanced driver-assistance systems (ADAS) represent a fusion of technologies used to aid
+drivers in controlling a vehicle. ADAS uses an array of sensors such as depth or 2D
+cameras, LiDAR (Light Detection and Ranging), RADAR (Radio Detection and Ranging) and
+ultrasonic sensors for environment perception on roadways. Sensor data is computed
+locally using a combination of different algorithms, giving the vehicle a varying range
+of decision-making capabilities that ensure roadway safety.
+</p>
+
+<p>
+Some examples of ADAS features are presented in [4]. They include human/object detection
+and tracking, collision warning and emergency braking. Many of these features also map
+directly to AMR safety requirements in collaborative working scenarios.
+</p>
+
+<p>
+Roadway environments are described by their unpredictable nature and a high amount of
+edge cases. This means that even in a fully automated vehicle, a human must still be
+aware and ready to take control, so safety is ensured. Warehousing environments, by
+comparison, are best described as controlled and predictable. They have a smaller amount
+of edge cases, which allows for full robotic autonomy. This is also relevant for the
+simulation of the environment.
+</p>
+
+<p>
+LiDAR sensors use emissions of light to determine the shape of the surrounding
+environment and to measure distances. They are based on the time-of-flight principle,
+which states that the time taken by an emitted ray of light to reach and return to the
+sensor can be directly used to determine the distance. This principle takes advantage of
+the constant nature of the speed of light to provide accurate measurements, which are
+stored as individual points.
+</p>
+
+<p>
+When a multitude of measurements from a singular scan are put together, they form a point
+cloud which directly maps to the shape of the environment. This data is particularly
+important in obstacle detection and localization within the environment. Techniques such
+as SLAM (Simultaneous Localization and Mapping) heavily rely on LiDAR data to determine
+the relative position of the robot within the environment, and to aid navigation. While
+these sensors are highly accurate, they are unable to measure aspects related to the
+visual properties of objects.
+</p>
+
+<p>
+Cameras represent a widely used sensor in perception systems. They work by capturing a
+succession of images across different color channels. The result is a representation of
+the environment which is analogous to human vision. The captured data can provide rich
+semantic information, such as texture, color and shape. However, they are very
+susceptible to environmental conditions, and can be affected by disruptions such as
+noise, camera glare, darkness or dust. When compared with LiDAR, cameras also have
+poorer depth perception.
+</p>
+
+<p>
+The technologies that will be analyzed in the following section focus on ADAS-specific
+object recognition techniques which are based solely on LiDAR or multimodal LiDAR-camera
+sensor fusion.
+</p>
+
+<h3>3.2.1 &nbsp; LiDAR Object Detection Algorithms</h3>
+
+<h4>PointNet++</h4>
+
+<p>
+PointNet [e] is the foundational end-to-end architecture for raw, unordered point clouds.
+It applies a shared Multi-Layer Perceptron (MLP) independently to each point, followed
+by a global max-pooling operation that aggregates all per-point features into a single
+permutation-invariant global descriptor. While effective for object classification, the
+global pooling step discards all local geometric relationships, limiting its performance
+on complex scene-level tasks.
+</p>
+
+<p>
+PointNet++ [f] addresses this limitation through a hierarchical set abstraction
+mechanism. At each level of the hierarchy, Farthest Point Sampling (FPS) selects a set
+of representative centroid points that are maximally spread across the input cloud.
+Ball-query grouping then collects all points within a fixed radius around each centroid,
+and a mini-PointNet encodes each local neighbourhood into a single feature vector,
+capturing geometric structure at the scale defined by the query radius. Stacking multiple
+such levels with increasing radii progressively builds context from fine local detail to
+coarse global structure. For dense per-point prediction tasks such as semantic
+segmentation, Feature Propagation (FP) layers upsample the downsampled features back
+to the original point count through inverse-distance weighted interpolation combined
+with skip-link concatenation from the corresponding set abstraction level. PointNet++
+handles non-uniform point density through a multi-scale grouping variant that combines
+features from multiple radii, making it well suited to indoor environments where near
+objects produce dense returns and distant objects produce sparse ones.
+</p>
+
+<h4>PointPillars</h4>
+
+<p>
+BirdNet [g] was an early demonstration that projecting the 3-D LiDAR cloud onto a
+Bird's Eye View (BEV) grid — encoding height statistics, point density, and intensity
+per cell — allows standard 2-D image-detection CNNs to be applied directly to LiDAR
+data. While lightweight and real-time capable, BEV projection discards elevation
+information within each cell, motivating richer 3-D encoding approaches.
+</p>
+
+<p>
+VoxelNet [h] extended the PointNet feature-learning approach to the full 3-D voxel
+space by partitioning the point cloud into equally-sized voxels and encoding each with
+a small Voxel Feature Encoding (VFE) network, followed by a 3-D convolutional middle
+layer and a Region Proposal Network. Although VoxelNet achieved strong detection accuracy,
+its 3-D convolution layers result in an inference rate of approximately 4.4 Hz on KITTI,
+making it unsuitable for real-time deployment and motivating the pillar-based
+simplification introduced by its successor.
+</p>
+
+<p>
+PointPillars [i] eliminates 3-D convolution entirely by discretising the x-y plane into
+a grid of vertical columns called pillars. Each point within a pillar is augmented with
+nine features: the four raw values <code>[x, y, z, intensity]</code>, the cluster-relative
+offsets <code>[Δx, Δy, Δz]</code>, and the pillar-centre coordinates
+<code>[x<sub>p</sub>, y<sub>p</sub>]</code>. A shared linear layer with Batch
+Normalisation and ReLU, followed by channel-wise max-pooling over all points in the
+pillar, produces a fixed-length feature vector per pillar. These vectors are scattered
+onto a dense (C, H, W) pseudo-image and processed by a 2-D CNN backbone with an SSD
+detection head. By replacing 3-D convolutions with 2-D ones, PointPillars achieves an
+inference rate of approximately 62 Hz on the KITTI benchmark — roughly four times faster
+than prior art at comparable accuracy — establishing the pillar-based pseudo-image
+representation as the standard for real-time LiDAR detection pipelines.
+</p>
+
+<h4>PV-RCNN</h4>
+
+<p>
+PV-RCNN [j] is a two-stage detector that combines the complementary strengths of
+voxel-based and point-based feature extraction. In the first stage, a 3-D sparse
+convolutional backbone processes the voxelised point cloud across the full scene and
+generates an initial set of 3-D region proposals through a Region Proposal Network. In
+the second stage, a set of keypoints is selected from the original point cloud using
+farthest point sampling. A voxel set abstraction module aggregates voxel-level features
+from multiple radii around each keypoint, producing compact representations that combine
+local geometric detail with large-scale voxel context. A refinement head uses these
+pooled keypoint features to correct the initial proposals, yielding precise 3-D bounding
+box predictions. PV-RCNN set state-of-the-art results on the KITTI 3-D detection
+benchmark at its time of publication, demonstrating the effectiveness of point-voxel
+feature integration. The principal trade-off relative to single-stage methods such as
+PointPillars is higher computational cost, resulting in lower inference throughput.
+</p>
+
+<h3>3.2.2 &nbsp; LiDAR–Camera Sensor Fusion for Object Detection</h3>
+
+<p>
+LiDAR–camera fusion methods combine the metric depth accuracy of LiDAR with the dense
+semantic and texture information provided by cameras. Three broad paradigms exist: early
+fusion concatenates raw sensor data before feature extraction; late fusion runs
+independent detection pipelines per modality and merges their outputs; intermediate
+fusion incorporates camera information at an intermediate stage of the LiDAR pipeline,
+achieving a balance between full cross-modal context and robustness to sensor degradation.
+</p>
+
+<h4>VirConvNet</h4>
+
+<p>
+VirConvNet [k] addresses a limitation shared by intermediate-fusion approaches that
+generate virtual 3-D points by depth-completing a 2-D image: the resulting virtual point
+density is highest near the sensor, where real LiDAR coverage is already adequate, and
+falls off at longer ranges, where additional coverage is most needed. The architecture
+introduces two components to address this imbalance.
+</p>
+
+<p>
+The first, Stochastic Voxel Discard (StVD), randomly drops a fraction of virtual voxels
+during training in the near-range region where real LiDAR coverage is already sufficient.
+This prevents the model from over-fitting to redundant near-range virtual points and
+forces it to develop useful representations for the sparser far-range regime.
+</p>
+
+<p>
+The second, the Noise-Resistant Sub-manifold Convolution (NRConv), encodes each voxel
+jointly in 3-D LiDAR space and 2-D image space. Image features sampled at the projected
+pixel location of each voxel are concatenated before the linear encoding step. Because
+depth-completed virtual points can carry positional noise when the depth estimate is
+inaccurate, NRConv suppresses this noise by learning a confidence weighting from the
+local LiDAR density, giving less influence to virtual features in regions where depth
+estimation is unreliable. VirConvNet achieved first and second place on the KITTI 3-D
+car detection leaderboard at the time of publication [k].
+</p>
+
+<p>
+In this project, VirConvNet is adapted from bounding-box detection to per-point semantic
+segmentation. The SSD detection head is replaced with a BEV segmentation head, and
+per-point class logits are gathered by indexing the BEV output at each point's pillar
+coordinate. Virtual point generation and pillarization are performed on the CPU in NumPy;
+an auxiliary 2-D segmentation loss applied at the image feature map maintains a gradient
+path to the image backbone across the NumPy computation boundary.
+</p>
+
+<h3>3.2.3 &nbsp; Summary of the Object Detection Algorithms</h3>
+
+<p>
+Table 3.1 summarises the reviewed algorithms, comparing modality, geometric
+representation, key architectural innovation, primary task, and principal trade-offs.
+</p>
+
+<table>
+  <caption>Table 3.1 – Comparison of reviewed LiDAR-based object recognition algorithms.</caption>
+  <thead>
+    <tr>
+      <th>Algorithm</th>
+      <th>Modality</th>
+      <th>Representation</th>
+      <th>Key innovation</th>
+      <th>Primary task</th>
+      <th>Strengths</th>
+      <th>Limitations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>PointNet [e]</td>
+      <td>LiDAR</td>
+      <td>Raw points</td>
+      <td>Shared MLP + global max-pool; permutation invariance</td>
+      <td>Classification, part segmentation</td>
+      <td>Simple; no voxelisation; exact geometry preserved</td>
+      <td>No local structure; limited scene-level accuracy</td>
+    </tr>
+    <tr>
+      <td>PointNet++ [f]</td>
+      <td>LiDAR</td>
+      <td>Raw points</td>
+      <td>Hierarchical set abstraction (FPS, ball query, mini-PointNet) + Feature Propagation</td>
+      <td>Semantic segmentation</td>
+      <td>Multi-scale local geometry; handles non-uniform density</td>
+      <td>FPS is slow; limited throughput on large scans</td>
+    </tr>
+    <tr>
+      <td>BirdNet [g]</td>
+      <td>LiDAR</td>
+      <td>BEV height map</td>
+      <td>BEV projection of height, density, and intensity channels</td>
+      <td>3-D detection with heading</td>
+      <td>Real-time; reuses image CNN architectures directly</td>
+      <td>Elevation detail lost; limited by BEV cell resolution</td>
+    </tr>
+    <tr>
+      <td>VoxelNet [h]</td>
+      <td>LiDAR</td>
+      <td>3-D voxels</td>
+      <td>Voxel Feature Encoding + 3-D CNN backbone + RPN</td>
+      <td>3-D object detection</td>
+      <td>Strong accuracy; fully end-to-end trainable</td>
+      <td>~4.4 Hz; 3-D convolutions are memory-intensive</td>
+    </tr>
+    <tr>
+      <td>PointPillars [i]</td>
+      <td>LiDAR</td>
+      <td>Vertical pillars → BEV pseudo-image</td>
+      <td>Pillar encoding eliminates 3-D convolutions; 9-feature point augmentation</td>
+      <td>3-D object detection</td>
+      <td>~62 Hz; excellent speed/accuracy balance</td>
+      <td>Pillar resolution limits small-object recall</td>
+    </tr>
+    <tr>
+      <td>PV-RCNN [j]</td>
+      <td>LiDAR</td>
+      <td>Voxels + keypoints</td>
+      <td>Two-stage point-voxel fusion; voxel set abstraction for proposal refinement</td>
+      <td>3-D object detection</td>
+      <td>State-of-the-art accuracy; precise localisation</td>
+      <td>Higher latency than single-stage; complex pipeline</td>
+    </tr>
+    <tr>
+      <td>VirConvNet [k]</td>
+      <td>LiDAR + Camera</td>
+      <td>Real + virtual points → voxels</td>
+      <td>Stochastic Voxel Discard + NRConv; joint 3-D/2-D encoding suppresses depth noise</td>
+      <td>3-D object detection (adapted to segmentation in this work)</td>
+      <td>State-of-the-art KITTI Car; effective at longer ranges</td>
+      <td>Depth completion adds complexity; virtual generation is CPU-bound</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h2>3.3 &nbsp; Overview of Path Planning Algorithms in Robotics</h2>
+<!-- ============================================================ -->
+
+<p>
+Path planning in robotics is the process of generating a route for a robot to move from
+its starting point to its destination. This route must avoid obstacles while also
+following additional imposed limitations. These algorithms are used before the robot
+starts its motion.
+</p>
+
+<p>
+Path planning usually begins with an environment modeling step, which creates a map of
+the area where the robot operates. This is followed by a path searching step, where a
+feasible path that starts from the initial point and which ends at the goal is computed.
+Path searching is done entirely within the model of the environment, this step also being
+where constraints are considered. Once the path is determined, the robot can execute its
+movement.
+</p>
+
+<p>
+Broadly, path planning algorithms can be classified into analytical, learning-based, and
+hybrid methods. Analytical methods, also called classical methods, are represented by
+traditional rule-based path planning algorithms, and can be categorized into graph-based
+planning algorithms and sampling-based algorithms.
+Learning-based methods were developed much later and are mainly inspired by innovations
+found in nature, with examples including evolutionary algorithms, swarm optimization,
+and neural network-based planning [5]. These methods utilize adaptive or
+population-based search techniques, which let the algorithm improve or learn solutions
+incrementally. They are appropriately used when dealing with complex or high-dimensional
+problems. Hybrid methods employ the use of elements from both analytical and
+learning-based methods.
+</p>
+
+<h3>3.3.1 &nbsp; Graph-Search Algorithms</h3>
+
+<p>
+Graph-based algorithms work by dividing the environment at predetermined points into two
+elements: nodes, which represent possible positions for the robot, and edges, which
+account for all possible transitions between nodes. The most notable graph-search
+algorithm is A*, widely recognized for its efficiency in optimization tasks in navigation
+and robotics [6], and upon which many variations have been built.
+</p>
+
+<p>
+Other examples of graph-search algorithms include Dijkstra's algorithm, Breadth-First
+Search and Depth-First Search [7]. They can, however, suffer in robotic applications
+within large environments due to their lack of a heuristic function component. In path
+generation, the heuristic greatly reduces the number of evaluated nodes by assigning
+values called weights to the transitions of the graph. It is used as a cost component
+and is typically chosen to be proportional to the direct distance from the node to the
+destination. However, it can also be chosen according to implementation-specific
+criteria.
+</p>
+
+<p>
+A* has a heuristic component. However, the algorithm is best suited for static
+environments where obstacles are known beforehand, much like the other graph-based
+methods presented above. This computational cost represents a problem for real-time,
+dynamic robotic applications. For this reason, A* variations with live replanning
+capabilities have been introduced in algorithms such as LPA* (Lifelong Planning A*),
+D*, and D* lite [8].
+</p>
+
+<p>
+The main advantage of D* lite over A* is its ability to reuse the parts of the paths
+that are not affected by obstacles when one is encountered. A comparative analysis of
+A* and D* lite done on a differential drive robot is presented in [9], where the quality
+of produced trajectories and the required computational time are measured and compared.
+According to the results, D* lite produces shorter paths on average, and is faster to
+compute in dynamic environments. However, A* generally outperforms D* lite in static
+environments.
+</p>
+
+<p>
+Graph-based path planning methods find a large range of applications in differing types
+of robots. In [10], an example of an implementation of a D* lite variation for a
+coastline and harbor unmanned surface vehicle path finding is shown, while [11]
+implements A* in unmanned aerial vehicle navigation.
+</p>
+
+<h3>3.3.2 &nbsp; Sampling-Based Algorithms</h3>
+
+<p>
+The other subset of analytical algorithms are the sampling-based algorithms. The methods
+employ a stochastic approach to pathfinding. Unlike the graph-based methods that require
+a complete environmental map, these algorithms build nodes and edges incrementally. They
+do this by randomly sampling points in the free space, creating nodes at these points
+and connecting them. The Rapidly-Exploring Random Tree (RRT) and the Probabilistic
+Roadmap algorithm (PRM) are two examples of this approach.
+</p>
+
+<p>
+The RRT algorithm [12] works by gradually building a tree that starts at the initial
+position. At each step, a random point in the configuration space is chosen, along with
+the closest node to that point. At each step a random point in the configuration space
+is sampled, along with the closest node to it. New nodes are generated by expanding in
+the direction of the point by a fixed step size, unless an obstacle intersection is
+detected. The process repeats until a node is generated within close distance to the
+goal node, at which point those two are connected and the full path is completed.
+</p>
+
+<p>
+While RRT is suited for unmapped environments, the generated paths are often jagged and
+can have a slow convergence to optimal results [13]. In many situations a post-processing
+step for path smoothing is used. RRT* [14] represents an extension of the base RRT
+algorithm which incorporates a rewiring step which constantly refines the structure of
+the tree as it is built.
+</p>
+
+<p>
+The PRM [15] algorithm, employs a two-phase approach: a learning phase and a query phase.
+In the learning phase, random configurations are sampled from the environment, which are
+connected through straight lines to its neighbors using a local planner, unless the
+generated connections collide with obstacles. This step forms a roadmap, represented
+through a discrete graph with nodes and transitions. The query step connects the start
+and goal nodes to the roadmap, after which graph search methods such as A* or Dijkstra's
+are applied to find the best path.
+</p>
+
+<p>
+This algorithm is quite efficient in situations where the same map is reused multiple
+times with differing start and goal configurations. Moreover, the performance of PRM
+degrades in narrow passages due to the lower probability of sampling valid,
+non-obstacle intersecting points [16].
+</p>
+
+<h3>3.3.3 &nbsp; Evolutionary Algorithms</h3>
+
+<p>
+An important learning-based pathfinding algorithm subset is represented by evolutionary
+algorithms. They work by using simulated evolution processes to find optimal paths. One
+of the most popular techniques in this category is the Genetic Algorithm (GA) [17], in
+which a new path is represented using a gene-containing chromosome. Genes represent the
+robot's intermediate positions, from the starting point to the goal. The evolutionary
+algorithm improves the set of potential paths through three main operations: selection,
+crossover, and mutation.
+</p>
+
+<p>
+During the selection process, candidate paths with a better fitness score, i.e. those
+that are shorter, safer, or smoother, have a greater likelihood of being chosen for the
+production of offspring. In the crossover process, genes from two parents are recombined
+to produce an offspring. In the mutation process, a small amount of randomness is applied
+to each gene in order to ensure that the population does not converge prematurely and to
+retain sufficient variety.
+</p>
+
+<p>
+The result of this process is that the algorithm will explore a large number of
+combinations of path segments simultaneously, while continuing to favor those
+combinations that provide better solutions. As the population continues to evolve, the
+paths will converge towards the optimal solution for the robot to utilize when navigating
+in the environment.
+</p>
+
+<p>
+In [18], a GA approach is implemented and tested in a mobile robot path planning
+application. The environment in which the tests took place was static and a grid. This
+paper demonstrates that GA can evaluate multiple paths simultaneously. However, a main
+disadvantage noted in the study is the tendency of GA towards premature convergence in
+highly constrained environments. Another noted disadvantage is the high computational
+cost, which constrains GA implementation in real world solutions.
+</p>
+
+<p>
+The GA approach can also be used for Unmanned Aerial Vehicle (UAV) planning, as shown
+in [19]. The paper introduces a method where candidate paths are encoded as genetic
+sequences and evolved to avoid local optima. Importantly, the fitness function is
+modified to encode the kinematic and safety constraints of UAVs. Similarly to the
+previous study, the high computational cost is also noted.
+</p>
+
+<h3>3.3.4 &nbsp; Swarm Intelligence Algorithms</h3>
+
+<p>
+Another category of learning-based methods is the Swarm Intelligence method, which is
+based on the behavior of biological systems such as flocks of birds or colonies of ants.
+Within it, the Particle Swarm Optimization [20] and the Ant Colony Optimization [21]
+algorithms are notable examples.
+</p>
+
+<p>
+In the Particle Swarm Optimization (PSO) algorithm, a set of candidate solutions called
+particles explore the space of solutions. Each particle maintains a memory of the best
+solution it has discovered so far, called the personal best, as well as the global best
+solution discovered so far by the entire particle swarm.
+</p>
+
+<p>
+At each iteration, the velocity of each particle is updated using a weighted combination
+of three components: inertia, a cognitive factor, and a social factor. While the inertia
+factor maintains the previous velocity, the cognitive and social factors move the
+particle towards the best personal and global solutions, respectively. This iterative
+process of information sharing and the balance of exploitation and exploration allows the
+swarm to gradually converge towards the optimal or near-optimal solutions in the search
+space.
+</p>
+
+<p>
+The Ant Colony Optimization (ACO) method is inspired by the paths ants take between
+sources of their food and their nest, and the pheromone trails generated by them.
+Similarly to analytical methods, the environment is represented as a graph, but this
+method additionally uses artificial pheromones deposited by agents while moving and
+exploring paths.
+</p>
+
+<p>
+The solution is generated probabilistically by using the pheromone levels left on the
+edges and a heuristic component. Once the agents have completed a path, pheromones are
+deposited proportionally to the quality of the solution, and older trails are slowly
+evaporated over time, reducing their deposited values and encouraging exploration. The
+algorithm will repeatedly build solutions to the problem and update pheromone values,
+ultimately converging towards the optimal or near-optimal solution for the problem.
+</p>
+
+<h3>3.3.5 &nbsp; Neural Network-Based Planners</h3>
+
+<p>
+A category of learning-based planning algorithms which have seen a great increase in
+interest in recent years are the Neural Network-based planners (NN) [22], inspired by
+the behavior of their biological neural counterparts. They are built from interconnected
+nodes, called neurons, that either propagate or inhibit signals. A key advantage of NNs
+is their ability to learn patterns from input data, which makes them very adaptable to
+different situations.
+</p>
+
+<p>
+Neural networks are used in many applications, such as natural language processing and
+image detection and generation. However, path planning implementations have specific
+challenges. Unlike the case of image classification or language processing, the neural
+network has to deal with the dynamic nature of the environment while respecting geometric
+and kinematic constraints. Early implementations were based on simple feedforward neural
+networks that mapped the input from the environment directly to the motion commands.
+However, these solutions were found to be deficient in terms of the ability to generalize
+to different environments.
+</p>
+
+<p>
+Recent solutions to the problem use a fusion of different deep learning architectures
+such as Convolutional Neural Networks (CNNs) for the feature extraction and Recurrent
+Neural Networks (RNNs) for decision-making. While reinforcement learning-based solutions
+have been found to be particularly effective in path planning, they also have drawbacks.
+The sim-to-real gap is one such example, where neural networks trained on virtual
+environments can fail to generalize to real-world implementations. Another issue posed
+by this architecture is the high computational, monetary, and time costs associated with
+the training process. Acquiring the relevant datasets for each implementation represents
+another issue, as they greatly vary from implementation to implementation.
+</p>
+
+<p>
+In [23], an approach combining odometry, deep learning-based artificial vision, and SLAM
+is presented. The system uses an NVIDIA Jetson Nano embedded system to control an
+autonomous mobile robot. It can recognize obstacles and convey their locations to a local
+navigation path planner by using two CNN architectures, ResNet18 and YOLOv3. This allows
+for real-time scene perception and object detection. The ResNet18-based vision system
+demonstrated the efficacy of deep learning algorithms in autonomous mobile robot
+applications, achieving an average accuracy of 98.5% across simulation and real-world
+trials.
+</p>
+
+<h3>3.3.6 &nbsp; Hybrid Pathfinding Methods</h3>
+
+<p>
+A main observation identified in the survey presented in [24] is that many
+state-of-the-art approaches in literature use hybrids of analytical and learning-based
+methods. In general, analytical path planning methods are unreliable in dynamic
+environment implementations, where they can be computationally expensive and thus harder
+to scale. Another noted observation is that the main analytical algorithm that is adapted
+in hybrid approaches is A*, which is usually paired with either genetic algorithms or
+deep learning. There are many such examples of hybrid algorithms, most of which are
+experimental in nature. The following paragraphs will discuss a couple of notable
+examples.
+</p>
+
+<p>
+One example of such an algorithm is Neural A*, introduced in [25], which uses a heuristic
+determined using a deep learning approach that is then applied in a traditional A*
+algorithm for path finding. Neural A* can be applied to point-to-point graph searches,
+as well as top-down raw image inputs. It manages to generate a path faster by exploring
+significantly fewer nodes than A*. In spite of the improvements made by this approach,
+significant disadvantages also present in A* still remain, foremost being the fact that
+neural A* is still mainly suited only for static environments. According to the conclusion
+of the paper, the presented implementation is not made to work on non-continuous spaces
+or those with more than two spatial dimensions.
+</p>
+
+<p>
+A solution to this problem presented in [26] is Hybrid A*, which addresses the issues
+posed by Neural A*. While simple A* assumes a holonomic vehicle and a discrete space,
+the proposed model is applied in a continuous, three-dimensional space, and considers
+vehicle orientation. Thus, the paths Hybrid A* generates satisfy real vehicle kinodynamic
+constraints. The nature of the terrain it traverses is also considered and used to
+optimize the path. Because of these factors, Hybrid A* can be more readily deployed in
+real world robotic vehicle applications.
+</p>
+
+<h3>3.3.7 &nbsp; Comparison of the Discussed Path Planning Algorithms</h3>
+
+<p>Table 1 – Summarization of the discussed methods</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Algorithm</th>
+      <th>Advantages</th>
+      <th>Disadvantages</th>
+      <th>Typical use cases</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>A*</td>
+      <td>Optimal in static environments. Heuristics make it faster. Simple and commonly built upon.</td>
+      <td>Requires fully known map. Scales poorly in large environments. Not for dynamic spaces.</td>
+      <td>Ground mobile robots in static environments.</td>
+    </tr>
+    <tr>
+      <td>D* lite</td>
+      <td>Incrementally replans in dynamic spaces. Reuses prior data. Builds on A*.</td>
+      <td>Poor scaling in large environments.</td>
+      <td>Ground mobile robots in dynamic spaces.</td>
+    </tr>
+    <tr>
+      <td>Dijkstra's</td>
+      <td>Very simple to implement.</td>
+      <td>Higher time and memory cost in large spaces than A* and D* lite. Lacks heuristic.</td>
+      <td>Static routing by itself or in other algorithms.</td>
+    </tr>
+    <tr>
+      <td>RRT</td>
+      <td>Handles high-dimensional spaces. No explicit environment model needed.</td>
+      <td>Jagged paths. Not efficient in narrow passages.</td>
+      <td>Robotic manipulators, mobile robots.</td>
+    </tr>
+    <tr>
+      <td>PRM</td>
+      <td>Efficient once roadmap is built.</td>
+      <td>Worse than RRT in narrow passages. Requires static environment.</td>
+      <td>Robotic manipulators, mobile robots.</td>
+    </tr>
+    <tr>
+      <td>GA</td>
+      <td>Evaluates many candidate paths simultaneously.</td>
+      <td>High computational cost in real-time applications can limit usage.</td>
+      <td>Ground and aerial mobile robots.</td>
+    </tr>
+    <tr>
+      <td>ACO</td>
+      <td>Distributes computation. Near-optimal solutions. No complete analytical model required.</td>
+      <td>Slow convergence. Suited mainly to pre-planned scenarios.</td>
+      <td>Network routing for mobile multi-robot systems.</td>
+    </tr>
+    <tr>
+      <td>PSO</td>
+      <td>Easy to hybridize with other methods. Fast convergence.</td>
+      <td>Poor performance in dynamic environments. Can converge on suboptimal solutions.</td>
+      <td>Ground mobile robot navigation. UAV trajectory optimization.</td>
+    </tr>
+    <tr>
+      <td>NN</td>
+      <td>Adaptability in complex and dynamic environments. Does not require explicit environment map.</td>
+      <td>Long training time. Gap in simulation to real system information transfer.</td>
+      <td>Mobile robot navigation in complex environments.</td>
+    </tr>
+    <tr>
+      <td>Neural A*</td>
+      <td>Optimized heuristic. Converges faster than A*.</td>
+      <td>Limited to 2D and static environments.</td>
+      <td>2D path planning.</td>
+    </tr>
+    <tr>
+      <td>Hybrid A*</td>
+      <td>Respects realistic kinodynamic constraints. No discretization required.</td>
+      <td>Requires known map. Higher computational cost than A*.</td>
+      <td>Mobile ground robots traversing difficult terrain.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<h1>BIBLIOGRAPHY (added references)</h1>
+<!-- ============================================================ -->
+
+<div class="bib">
+
+<p>[a] G. Fragapane, R. de Koster, F. Sgarbossa, and J. O. Strandhagen, "Planning and control of autonomous mobile robots for intralogistics: Literature review and research agenda," <em>European Journal of Operational Research</em>, vol. 294, no. 2, pp. 405–426, 2021.</p>
+
+<p>[b] International Organization for Standardization, <em>ISO 10218-1:2011 — Robots and Robotic Devices: Safety Requirements for Industrial Robots — Part 1: Robots</em>, Geneva, Switzerland, 2011.</p>
+
+<p>[c] International Organization for Standardization, <em>ISO 10218-2:2011 — Robots and Robotic Devices: Safety Requirements for Industrial Robots — Part 2: Robot Systems and Integration</em>, Geneva, Switzerland, 2011.</p>
+
+<p>[d] International Organization for Standardization, <em>ISO/TS 15066:2016 — Robots and Robotic Devices: Collaborative Robots</em>, Geneva, Switzerland, 2016.</p>
+
+<p>[e] C. R. Qi, H. Su, K. Mo, and L. J. Guibas, "PointNet: Deep learning on point sets for 3D classification and segmentation," in <em>Proc. IEEE/CVF CVPR</em>, Honolulu, HI, 2017, pp. 652–660.</p>
+
+<p>[f] C. R. Qi, L. Yi, H. Su, and L. J. Guibas, "PointNet++: Deep hierarchical feature learning on point sets in a metric space," in <em>Proc. NeurIPS</em>, Long Beach, CA, 2017.</p>
+
+<p>[g] J. Beltrán, C. Guindel, F. M. Moreno, D. Cruzado, F. García, and A. de la Escalera, "BirdNet: A 3D object detection framework from LiDAR information," in <em>Proc. IEEE ITSC</em>, Maui, HI, 2018, pp. 3517–3523.</p>
+
+<p>[h] Y. Zhou and O. Tuzel, "VoxelNet: End-to-end learning for point cloud based 3D object detection," in <em>Proc. IEEE/CVF CVPR</em>, Salt Lake City, UT, 2018, pp. 4490–4499.</p>
+
+<p>[i] A. H. Lang, S. Vora, H. Caesar, L. Zhou, J. Yang, and O. Beijbom, "PointPillars: Fast encoders for object detection from point clouds," in <em>Proc. IEEE/CVF CVPR</em>, Long Beach, CA, 2019, pp. 12697–12705.</p>
+
+<p>[j] S. Shi, C. Guo, L. Jiang, Z. Wang, J. Shi, X. Wang, and H. Li, "PV-RCNN: Point-voxel feature set abstraction for 3D object detection," in <em>Proc. IEEE/CVF CVPR</em>, Seattle, WA, 2020, pp. 10529–10538.</p>
+
+<p>[k] H. Wu, C. Wen, S. Shi, X. Li, and C. Wang, "Virtual sparse convolution for multimodal 3D object detection," in <em>Proc. IEEE/CVF CVPR</em>, Vancouver, BC, Canada, 2023, pp. 21653–21662.</p>
+
+</div>
+
+</body>
+</html>

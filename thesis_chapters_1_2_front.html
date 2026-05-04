@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Thesis – Sinopsis, Abstract, Chapters 1 &amp; 2</title>
+<style>
+  body {
+    font-family: "Times New Roman", serif;
+    font-size: 12pt;
+    line-height: 1.5;
+    max-width: 860px;
+    margin: 40px auto;
+    padding: 0 30px;
+    color: #111;
+  }
+  h1 { font-size: 16pt; text-transform: uppercase; margin-top: 40px; }
+  h2 { font-size: 14pt; margin-top: 32px; }
+  h3 { font-size: 12pt; margin-top: 24px; }
+  h4 { font-size: 12pt; margin-top: 18px; font-style: italic; }
+  p  { text-align: justify; margin: 8px 0; }
+  .diagram-placeholder {
+    border: 2px dashed #888;
+    background: #fafafa;
+    padding: 20px;
+    text-align: center;
+    color: #555;
+    font-style: italic;
+    margin: 16px 0;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 11pt;
+  }
+  th, td {
+    border: 1px solid #aaa;
+    padding: 6px 10px;
+  }
+  th { background: #eee; }
+  .note {
+    background: #fffbe6;
+    border-left: 4px solid #f0b429;
+    padding: 8px 12px;
+    font-size: 10pt;
+    margin: 10px 0;
+  }
+  ul, ol { margin: 6px 0 6px 24px; }
+  li { margin: 3px 0; }
+
+  /* Front matter uses centred, slightly smaller headings without uppercase */
+  .front-heading {
+    font-size: 14pt;
+    font-weight: bold;
+    text-transform: none;
+    text-align: left;
+    margin-top: 40px;
+    margin-bottom: 6px;
+  }
+  .keywords {
+    font-style: italic;
+    margin-top: 10px;
+  }
+  hr.section-break {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 40px 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- SINOPSIS (Romanian) -->
+<!-- ============================================================ -->
+
+<p class="front-heading">Sinopsis</p>
+
+<p>
+Această lucrare investighează transferabilitatea arhitecturilor de percepție LiDAR–cameră
+din domeniul ADAS în scenarii de depozitare industrială interioară. O simulare fizică în
+PyBullet colectează autonom nori de puncte LiDAR și imagini RGB cu etichete semantice
+pentru patru clase — fundal, rafturi, lăzi și stivuitor — folosind un planificator Hybrid
+A*. Modelul VirConvNet (Wu et al., 2023), adaptat pentru segmentare semantică per-punct,
+augmentează punctele LiDAR cu trăsături de imagine și generează puncte 3D virtuale din
+regiunile de prim-plan ale imaginii neacoperite de LiDAR. Un studiu de ablație
+cuantifică contribuția individuală a fiecărui mecanism de fuziune, stabilind o linie de
+bază pentru percepția ADAS în medii industriale interioare.
+</p>
+
+<p class="keywords">
+<strong>Cuvinte cheie:</strong> LiDAR, fuziune LiDAR–cameră, segmentare semantică 3D,
+VirConvNet, depozitare, roboți mobili autonomi, simulare PyBullet, Hybrid A*.
+</p>
+
+<hr class="section-break">
+
+<!-- ============================================================ -->
+<!-- ABSTRACT (English) -->
+<!-- ============================================================ -->
+
+<p class="front-heading">Abstract</p>
+
+<p>
+This thesis investigates the transferability of ADAS LiDAR–camera perception architectures
+to an indoor warehousing environment. A configurable PyBullet simulation autonomously
+collects synchronised LiDAR point clouds and RGB images with pixel-perfect semantic labels
+across four classes — background, shelves, crates, and forklifts — using a Hybrid A*
+navigation stack. VirConvNet (Wu et al., 2023) is adapted from multimodal bounding-box
+detection to per-point semantic segmentation: each LiDAR point is augmented with
+32-dimensional image features from a lightweight CNN backbone, and virtual 3-D points are
+generated from foreground image regions not covered by LiDAR returns. A three-variant
+ablation isolates the contributions of image features and virtual points; a distance-zone
+analysis tests whether virtual augmentation specifically addresses the LiDAR density
+deficit at longer ranges. The work establishes a reproducible baseline for ADAS-to-
+warehousing perception transfer and characterises the principal indoor domain gaps.
+</p>
+
+<p class="keywords">
+<strong>Keywords:</strong> LiDAR, camera fusion, 3-D semantic segmentation,
+VirConvNet, warehousing, autonomous mobile robots, simulation, Hybrid&nbsp;A*.
+</p>
+
+<hr class="section-break">
+
+<!-- ============================================================ -->
+<h1>1 &nbsp; INTRODUCTION</h1>
+<!-- ============================================================ -->
+
+<h2>1.1 &nbsp; Context</h2>
+
+<p>
+Warehouse automation is accelerating rapidly, driven by sustained growth in e-commerce
+volumes and increasing pressure on logistics operators to reduce order fulfilment times
+while managing labour costs. Autonomous Mobile Robots (AMRs) and autonomous forklifts
+are now commercially deployed in large distribution centres, where they perform tasks
+such as pallet retrieval, shelf replenishment, and goods-to-person delivery. Despite
+their growing adoption, the perception systems on these platforms remain far less mature
+than those of self-driving cars. Road vehicles benefit from two decades of academic
+competition benchmarks — KITTI (Geiger et al., 2012), nuScenes (Caesar et al., 2020),
+Waymo Open Dataset (Sun et al., 2020) — and the hundreds of published architectures
+trained and validated on them. No equivalent public benchmark exists for indoor industrial
+perception.
+</p>
+
+<p>
+Advanced Driver Assistance Systems (ADAS) have produced a rich body of LiDAR–camera
+fusion architectures optimised for road scenarios. Models such as PointPillars
+(Lang et al., 2019) achieve over 60 Hz inference on KITTI while matching or surpassing
+earlier fusion methods in 3-D bounding-box detection accuracy. VirConvNet (Wu et al.,
+2023) introduces virtual point generation from depth-completed image data, reaching
+state-of-the-art results on KITTI car detection. These architectures encode strong
+geometric priors learned from outdoor scenes: vehicle-sized anchor boxes, horizontal
+ground planes extending to tens of metres, and sensor noise profiles calibrated for
+outdoor atmospheric conditions.
+</p>
+
+<p>
+This project asks a direct transfer question: can these ADAS-designed architectures be
+applied to an indoor warehousing environment — a setting with short sensor ranges,
+axis-aligned shelf geometry, severe object scale variation, and stable controlled
+lighting — with minimal modification, and if so, how much of their capability transfers
+and where does it break down? To answer this question reproducibly, a physics-based
+simulation was built to generate labelled training data, VirConvNet was retrained from
+scratch on that data, and its performance was characterised through quantitative
+evaluation and a controlled ablation study.
+</p>
+
+<h2>1.2 &nbsp; Problem Statement</h2>
+
+<p>
+ADAS perception models are developed and benchmarked exclusively on outdoor, road-centric
+datasets. No public benchmark and no evaluation baseline exists for LiDAR-based 3-D
+semantic perception in indoor warehousing. Three specific gaps motivate this project:
+</p>
+
+<p>
+<strong>Gap 1 — Absence of a labelled indoor perception dataset.</strong>
+All major 3-D perception benchmarks are outdoor and vehicle-centric. Annotating a real
+warehouse dataset at the point-cloud level requires either manual labelling, which is
+prohibitively expensive at scale, or a simulation that provides ground-truth labels for
+free. Neither a standard simulation platform nor a standard evaluation protocol for
+indoor warehouse perception exists in the published literature.
+</p>
+
+<p>
+<strong>Gap 2 — Unknown model transferability.</strong>
+It is unknown whether ADAS-designed architectures apply to warehousing without
+retraining or structural modification. Indoor LiDAR scans differ from outdoor scans in
+almost every statistical property: point density falls off more steeply with range
+(no distant vehicle lanes), the dominant horizontal structure is a flat floor rather than
+a road surface, shelf geometry produces long narrow planar return patterns that resemble
+no KITTI object class, and the maximum useful range is 15–20 m rather than 70–100 m.
+Whether the feature representations learned from road scenarios transfer to these
+conditions is an open empirical question.
+</p>
+
+<p>
+<strong>Gap 3 — Unknown fusion benefit in stable indoor lighting.</strong>
+The advantage of LiDAR–camera fusion over LiDAR-only detection is well-documented in
+outdoor ADAS literature, where camera quality degrades at night, in rain, and in
+back-lit conditions. In a warehouse with stable fluorescent or LED lighting, this
+source of fusion benefit is absent. Whether camera information — specifically image
+texture and semantic segmentation masks — still provides a meaningful boost over
+LiDAR geometry alone in stable indoor conditions is untested.
+</p>
+
+<h2>1.3 &nbsp; Objectives</h2>
+
+<p>
+The project pursues five concrete objectives that together constitute a complete
+end-to-end pipeline from environment modelling to model evaluation:
+</p>
+
+<ol>
+  <li>
+    <strong>Simulation platform.</strong>
+    Develop a configurable 28 × 30 m warehouse simulation in PyBullet with a
+    VLP-16-inspired LiDAR sensor (360° × 16 channels, 5 760 rays/scan, 20 m maximum
+    range) and a synchronised RGB camera (640 × 480, 90° vertical FoV), producing
+    per-scan semantic labels for four object classes at zero annotation cost via the
+    PyBullet built-in segmentation renderer.
+  </li>
+  <li>
+    <strong>Autonomous navigation for data collection.</strong>
+    Implement a Hybrid A* navigation stack — comprising the planner, a Pure Pursuit
+    path-tracking controller, and a background replanning thread — to drive the robot
+    autonomously through the warehouse, ensuring dense, reproducible spatial coverage
+    during data collection without manual teleoperation.
+  </li>
+  <li>
+    <strong>Labelled multi-modal dataset.</strong>
+    Collect a synchronised, semantically labelled dataset of LiDAR point clouds and RGB
+    images across four classes: background (0), shelf (1), crate (2), forklift (3).
+    The dataset must include at least 5 000 frames with a reproducible 80/20 train/
+    validation split aligned across both modalities.
+  </li>
+  <li>
+    <strong>VirConvNet adapted for warehouse semantic segmentation.</strong>
+    Adapt VirConvNet (Wu et al., 2023) from its original multimodal bounding-box
+    detection formulation to per-point semantic segmentation by replacing the detection
+    head with a BEV segmentation head; train it on the collected paired LiDAR–image
+    data; and evaluate using per-class IoU, mIoU, precision, recall, and F1-score on
+    the held-out validation set.
+  </li>
+  <li>
+    <strong>Ablation study and domain gap characterisation.</strong>
+    Decompose the VirConvNet fusion gain into image-feature and virtual-point components
+    through a three-variant controlled ablation; analyse recognition accuracy across
+    forward-distance bins; and characterise the principal domain gap factors between the
+    outdoor ADAS literature and the indoor warehousing setting.
+  </li>
+</ol>
+
+<h2>1.4 &nbsp; Structure of the Thesis</h2>
+
+<p>
+The remainder of the thesis is organised as follows.
+</p>
+
+<p>
+<strong>Chapter 2 (Requirements Analysis)</strong> establishes the scientific motivation
+in detail, defines the three research gaps, and delimits the scope of the project by
+identifying what is and is not addressed.
+</p>
+
+<p>
+<strong>Chapter 3 (State of the Art)</strong> reviews the eleven papers in the
+documentation folder across six areas: LiDAR-only 3-D detection (point-based,
+voxel-based, BEV-based, and pillar-based methods), camera-only 3-D detection,
+LiDAR–camera fusion paradigms and ExistenceMap-PointPillars, improved PointPillars
+variants, path planning with Hybrid A*, and the relationship between SLAM and this
+project. The review contextualises the two model choices and positions the project
+within the published literature.
+</p>
+
+<p>
+<strong>Chapter 4 (Proposed Solution)</strong> presents the overall system architecture
+across its four subsystems — simulation, perception, navigation, and training pipeline —
+and documents the design decisions and trade-offs that shaped the implementation.
+</p>
+
+<p>
+<strong>Chapter 5 (Implementation Details)</strong> describes the algorithms and data
+structures implemented in each source module, covering the simulation world construction,
+the LiDAR sensor and camera pipeline, the Hybrid A* planner and path-tracking controller,
+and the VirConvNet architecture as adapted for warehouse semantic segmentation.
+</p>
+
+<p>
+<strong>Chapter 6 (Evaluation of Results)</strong> presents and analyses the VirConvNet
+training and validation results, including the three-variant ablation study, the
+distance-zone breakdown, and the reflection on what the quantitative findings imply for
+the central research question.
+</p>
+
+<p>
+<strong>Chapter 7 (Conclusions)</strong> summarises the contributions, states the research
+conclusions, acknowledges the limitations of the current work, and identifies directions
+for future work including real hardware deployment and SLAM integration.
+</p>
+
+<!-- ============================================================ -->
+<h1>2 &nbsp; REQUIREMENTS ANALYSIS</h1>
+<!-- ============================================================ -->
+
+<h2>2.1 &nbsp; Scientific Motivation</h2>
+
+<p>
+Autonomous mobile robots and autonomous forklifts deployed in industrial warehouses must
+perceive and classify two distinct categories of objects in their environment: static
+infrastructure — shelves, walls, loading bays — and dynamic obstacles — crates, pallets,
+and other vehicles or workers. LiDAR is the preferred sensor for this role for three
+reasons. First, it provides metric depth measurements directly, without the ill-posed
+monocular depth estimation problem that limits camera-only approaches. Second, it is
+invariant to warehouse lighting conditions: fluorescent flicker, shadows cast by tall
+shelving, and back-lighting near loading doors do not affect the ranging accuracy of a
+time-of-flight scanner. Third, the per-point intensity channel provides a weak but
+direct material reflectivity estimate, which is useful for distinguishing metallic shelf
+surfaces from the painted concrete floor.
+</p>
+
+<p>
+Despite these advantages, the entire 3-D LiDAR perception literature is built around
+outdoor, road-centric benchmarks. Indoor industrial scenarios introduce a distinct set
+of challenges not addressed by existing models:
+</p>
+
+<ul>
+  <li>
+    <strong>Short sensor range.</strong> In a 28 × 30 m warehouse the effective LiDAR
+    range is 15–20 m, compared to 70–100 m for highway ADAS. Point density therefore
+    falls off over a compressed distance scale; objects at 15 m receive the same return
+    density as objects at 70 m do in outdoor KITTI scans.
+  </li>
+  <li>
+    <strong>Near-uniform horizontal floor plane.</strong> The warehouse floor is a large
+    flat background surface that contributes the majority of LiDAR returns and dominates
+    the feature space. Outdoor scans are dominated by a smaller road surface bounded by
+    kerbs and vegetation, which provides natural segmentation cues absent indoors.
+  </li>
+  <li>
+    <strong>Extreme object scale variation.</strong> Shelf units in this simulation span
+    4 m × 12 m × 2.8 m (width × length × height), roughly 20× the volume of a typical
+    KITTI car. Crates are 0.5 × 0.5 × 0.5 m, smaller than a KITTI pedestrian. No single
+    anchor box resolution simultaneously resolves both extremes well.
+  </li>
+  <li>
+    <strong>Stable, controlled lighting.</strong> Warehouses operate under uniform
+    artificial illumination. The primary motivation for LiDAR–camera fusion in outdoor
+    ADAS — degraded camera quality at night, in rain, or in fog — is therefore absent.
+    Whether fusion still helps in a well-lit indoor environment is a non-trivial question.
+  </li>
+  <li>
+    <strong>No weather-induced sensor degradation.</strong> Outdoor LiDAR scans exhibit
+    spurious returns from rain droplets and signal attenuation in fog. Indoor scans have
+    none of these artefacts; the dominant noise sources are quantisation, surface
+    reflectivity variation, and multi-path reflections from smooth metallic surfaces.
+  </li>
+</ul>
+
+<p>
+Three explicit research gaps follow directly from the mismatch between the ADAS
+literature and warehousing requirements:
+</p>
+
+<p>
+<strong>Gap 1 — Dataset.</strong>
+No public benchmark for LiDAR-based 3-D semantic perception in indoor warehousing exists.
+All major benchmarks (KITTI, nuScenes, Waymo, ScanNet) are either outdoor and vehicle-
+centric or indoor and RGB-D-only. Without a labelled warehouse dataset it is impossible to
+train or evaluate any supervised learning approach for this domain. This project addresses
+Gap 1 by constructing a simulation capable of generating arbitrarily large amounts of
+labelled data.
+</p>
+
+<p>
+<strong>Gap 2 — Model transferability.</strong>
+It is unknown whether pillar-based and virtual-point-based architectures designed for
+road scenarios can be applied to warehousing with minimal modification. VirConvNet builds
+on the PointPillars pillar encoding — pillar-level geometry discretised over a large BEV
+grid, feature representations learned from car and pedestrian geometry — which encodes
+strong outdoor-scene priors that may or may not be compatible with the different scale and
+structure of warehouse objects. Answering Gap 2 requires retraining the architecture on
+warehouse data and measuring whether the resulting model achieves meaningful accuracy
+across all four object classes.
+</p>
+
+<p>
+<strong>Gap 3 — Fusion benefit in stable indoor lighting.</strong>
+The advantage of LiDAR–camera fusion measured on outdoor benchmarks may not transfer to
+warehousing, where the principal justification for including camera data — robustness to
+lighting variation — does not apply. VirConvNet's virtual point mechanism is specifically
+designed to fill in LiDAR coverage gaps using camera-derived depth estimates; whether
+this mechanism still yields a measurable improvement when the warehouse camera produces
+reliable, stable images throughout the operating cycle is the core empirical question
+addressed by the ablation in Chapter 6.
+</p>
+
+<h2>2.2 &nbsp; Research Scope</h2>
+
+<p>
+The research scope is defined by five in-scope items and four explicit exclusions.
+</p>
+
+<p>
+<strong>In scope:</strong>
+</p>
+<ol>
+  <li>
+    A configurable physics-based simulation of an indoor warehouse in PyBullet,
+    including a VLP-16-inspired LiDAR sensor, a forward-facing RGB camera, and
+    semantic label generation for four object classes.
+  </li>
+  <li>
+    A fully autonomous data collection pipeline driven by Hybrid A* navigation,
+    producing synchronised, labelled LiDAR–image pairs.
+  </li>
+  <li>
+    Adaptation, training, and evaluation of VirConvNet for multimodal per-point
+    semantic segmentation on the collected warehouse dataset.
+  </li>
+  <li>
+    A three-variant ablation study decomposing the VirConvNet fusion contribution
+    (LiDAR-only vs. LiDAR + image features vs. full VirConvNet with virtual points)
+    and a distance-zone analysis characterising range-dependent accuracy.
+  </li>
+  <li>
+    A quantitative characterisation of the domain gap between outdoor ADAS perception
+    and indoor warehousing, providing a reproducible baseline for future work.
+  </li>
+</ol>
+
+<p>
+<strong>Out of scope:</strong>
+</p>
+<ol>
+  <li>
+    <strong>Real hardware deployment.</strong> All experiments are conducted entirely
+    within the PyBullet simulation. Mounting sensors on a physical forklift or AMR and
+    validating models on real warehouse data is identified as the most important
+    direction for future work (Section 7.4) but is not pursued in this thesis.
+  </li>
+  <li>
+    <strong>Multi-robot and dynamic agent scenarios.</strong> The simulation contains
+    one robot and one stationary forklift. No multi-agent interactions, moving obstacles,
+    or pedestrian traffic are modelled. Dynamic object diversity in the training data is
+    limited to the fixed-position crate and forklift instances.
+  </li>
+  <li>
+    <strong>Simultaneous Localisation and Mapping (SLAM).</strong> The simulation
+    provides the robot's position and orientation directly from the PyBullet rigid-body
+    state, effectively bypassing the SLAM problem. In a real-world deployment, a
+    LiDAR-SLAM front-end (e.g., LIO-SAM, Cartographer) would be a prerequisite to
+    the perception layer developed here, but it is not implemented in this project.
+    The sensor data formats (point clouds in sensor frame, per-point labels, BEV
+    representations) are directly compatible with standard SLAM pipelines, leaving
+    the integration as future work.
+  </li>
+  <li>
+    <strong>3-D object detection and bounding-box regression.</strong> VirConvNet is
+    evaluated as a semantic segmentation system (per-point class labels). Bounding-box
+    regression, instance segmentation, and object tracking are not evaluated. The choice
+    of segmentation over detection reflects the availability of per-point labels from the
+    simulation renderer and the desire to evaluate all four classes — including shelves,
+    whose large irregular geometry makes anchor-based detection non-trivial — within a
+    single unified metric (mIoU).
+  </li>
+</ol>
+
+<p>
+Table 2.1 summarises the hardware and software parameters that define the boundary
+conditions of the research.
+</p>
+
+<table>
+  <caption>Table 2.1 – Key simulation and sensor parameters defining the experimental scope.</caption>
+  <thead>
+    <tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Warehouse floor area</td>
+      <td>28 × 30 m</td>
+      <td>Representative of a small-to-medium distribution centre bay.</td>
+    </tr>
+    <tr>
+      <td>Number of shelf units</td>
+      <td>6 (3 columns × 2 rows)</td>
+      <td>Creates three N–S aisles of ~6.5 m width, a typical AMR operating environment.</td>
+    </tr>
+    <tr>
+      <td>LiDAR channels</td>
+      <td>16 (VLP-16 inspired)</td>
+      <td>The VLP-16 is the most widely deployed scanner in warehouse AMR products.</td>
+    </tr>
+    <tr>
+      <td>LiDAR scan rate</td>
+      <td>10 Hz (360° per scan)</td>
+      <td>Matches the real VLP-16 rotation rate; defines the 100 ms inference budget.</td>
+    </tr>
+    <tr>
+      <td>LiDAR maximum range</td>
+      <td>20 m</td>
+      <td>Covers the full warehouse width; matches indoor VLP-16 performance envelope.</td>
+    </tr>
+    <tr>
+      <td>Camera resolution</td>
+      <td>640 × 480, 90° VFoV</td>
+      <td>Typical embedded camera resolution; 90° VFoV covers the full shelf height at 5 m.</td>
+    </tr>
+    <tr>
+      <td>Semantic classes</td>
+      <td>4 (background, shelf, crate, forklift)</td>
+      <td>Covers the principal static infrastructure and dynamic obstacle types in warehousing.</td>
+    </tr>
+    <tr>
+      <td>Dataset split</td>
+      <td>80 % train / 20 % val (every 5th frame → val)</td>
+      <td>Deterministic split ensures validation poses are spread uniformly across the warehouse.</td>
+    </tr>
+    <tr>
+      <td>Navigation planner</td>
+      <td>Hybrid A* (continuous (x, y, θ) state space)</td>
+      <td>Generates kinodynamically feasible paths; proved in DARPA Urban Challenge.</td>
+    </tr>
+    <tr>
+      <td>Robot pose source</td>
+      <td>Oracle (PyBullet rigid-body state)</td>
+      <td>Removes localisation error from the perception evaluation; SLAM out of scope.</td>
+    </tr>
+  </tbody>
+</table>
+
+</body>
+</html>
